@@ -1,0 +1,419 @@
+import tkinter as tk
+import math
+import random
+import copy
+
+# --- Các hằng số toàn cục ---
+CELL_SIZE = 80    # Kích thước mỗi ô (pixel)
+PADDING = 20      # Khoảng cách biên của canvas
+DOT_RADIUS = 4    # Bán kính điểm
+
+# --- Lớp lưu trữ trạng thái bàn chơi ---
+class GameState:
+    def __init__(self, rows, cols):
+        self.rows = rows
+        self.cols = cols
+        # Ma trận các đường ngang: (rows+1) x cols
+        self.horiz = [[False for _ in range(cols)] for _ in range(rows + 1)]
+        # Ma trận các đường dọc: rows x (cols+1)
+        self.vert = [[False for _ in range(cols + 1)] for _ in range(rows)]
+        # Ma trận ô vuông: rows x cols, None nếu chưa ai chiếm
+        self.boxes = [[None for _ in range(cols)] for _ in range(rows)]
+        self.player_score = 0
+        self.bot_score = 0
+        self.turn = 'player'  # lượt đầu tiên: người chơi
+
+    def clone(self):
+        new_state = GameState(self.rows, self.cols)
+        new_state.horiz = copy.deepcopy(self.horiz)
+        new_state.vert = copy.deepcopy(self.vert)
+        new_state.boxes = copy.deepcopy(self.boxes)
+        new_state.player_score = self.player_score
+        new_state.bot_score = self.bot_score
+        new_state.turn = self.turn
+        return new_state
+
+    def is_game_over(self):
+        # Trò chơi kết thúc khi tất cả các đường đã được vẽ
+        for row in self.horiz:
+            if False in row:
+                return False
+        for row in self.vert:
+            if False in row:
+                return False
+        return True
+
+    def get_possible_moves(self):
+        moves = []
+        # Các bước đi: đường ngang định dạng ("h", i, j)
+        for i in range(len(self.horiz)):
+            for j in range(len(self.horiz[0])):
+                if not self.horiz[i][j]:
+                    moves.append(("h", i, j))
+        # Các bước đi: đường dọc định dạng ("v", i, j)
+        for i in range(len(self.vert)):
+            for j in range(len(self.vert[0])):
+                if not self.vert[i][j]:
+                    moves.append(("v", i, j))
+        return moves
+
+    def apply_move(self, move, player):
+        """
+        Thực hiện nước đi:
+         - Đánh dấu đường được vẽ.
+         - Kiểm tra xem có ô nào được “chốt” sau nước đi không.
+         - Nếu có ô được chốt, cộng điểm và trả về extra_move=True.
+        """
+        extra_move = False
+        move_type, i, j = move
+        if move_type == "h":
+            self.horiz[i][j] = True
+        else:
+            self.vert[i][j] = True
+
+        completed_box = False
+
+        if move_type == "h":
+            # Kiểm tra ô phía trên (nếu có)
+            if i > 0:
+                if (self.horiz[i-1][j] and self.vert[i-1][j] and 
+                    self.vert[i-1][j+1] and self.horiz[i][j]):
+                    if self.boxes[i-1][j] is None:
+                        self.boxes[i-1][j] = player
+                        completed_box = True
+                        if player == 'player':
+                            self.player_score += 1
+                        else:
+                            self.bot_score += 1
+            # Kiểm tra ô phía dưới (nếu có)
+            if i < self.rows:
+                if (self.horiz[i][j] and self.vert[i][j] and 
+                    self.vert[i][j+1] and self.horiz[i+1][j]):
+                    if self.boxes[i][j] is None:
+                        self.boxes[i][j] = player
+                        completed_box = True
+                        if player == 'player':
+                            self.player_score += 1
+                        else:
+                            self.bot_score += 1
+        else:  # Nước đi là đường dọc
+            # Kiểm tra ô bên trái (nếu có)
+            if j > 0:
+                if (self.vert[i][j-1] and self.horiz[i][j-1] and 
+                    self.horiz[i+1][j-1] and self.vert[i][j]):
+                    if self.boxes[i][j-1] is None:
+                        self.boxes[i][j-1] = player
+                        completed_box = True
+                        if player == 'player':
+                            self.player_score += 1
+                        else:
+                            self.bot_score += 1
+            # Kiểm tra ô bên phải (nếu có)
+            if j < self.cols:
+                if (self.vert[i][j] and self.horiz[i][j] and 
+                    self.horiz[i+1][j] and self.vert[i][j+1]):
+                    if self.boxes[i][j] is None:
+                        self.boxes[i][j] = player
+                        completed_box = True
+                        if player == 'player':
+                            self.player_score += 1
+                        else:
+                            self.bot_score += 1
+
+        if completed_box:
+            extra_move = True
+        return extra_move
+
+# --- Hàm đánh giá trạng thái (heuristic) ---
+def evaluate_state(state):
+    # Hiệu số điểm hiện tại
+    score = state.bot_score - state.player_score
+    # Cân nhắc thêm “tiềm năng” chiếm ô: duyệt qua các ô chưa hoàn thành
+    for i in range(state.rows):
+        for j in range(state.cols):
+            if state.boxes[i][j] is None:
+                drawn = 0
+                if state.horiz[i][j]:
+                    drawn += 1
+                if state.horiz[i+1][j]:
+                    drawn += 1
+                if state.vert[i][j]:
+                    drawn += 1
+                if state.vert[i][j+1]:
+                    drawn += 1
+                if drawn == 3:
+                    bonus = 2.0
+                    score += bonus if state.turn == 'bot' else -bonus
+                elif drawn == 2:
+                    bonus = 0.5
+                    score += bonus if state.turn == 'bot' else -bonus
+    return score
+
+# --- Thuật toán minimax với alpha-beta pruning ---
+def minimax(state, depth, alpha, beta, maximizing_player):
+    if depth == 0 or state.is_game_over():
+        return evaluate_state(state), None
+
+    possible_moves = state.get_possible_moves()
+    best_move = None
+
+    if maximizing_player:
+        max_eval = -math.inf
+        for move in possible_moves:
+            new_state = state.clone()
+            extra = new_state.apply_move(move, 'bot')
+            if extra:
+                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, True)
+            else:
+                new_state.turn = 'player'
+                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, False)
+            if eval_score > max_eval:
+                max_eval = eval_score
+                best_move = move
+            alpha = max(alpha, eval_score)
+            if beta <= alpha:
+                break
+        return max_eval, best_move
+    else:
+        min_eval = math.inf
+        for move in possible_moves:
+            new_state = state.clone()
+            extra = new_state.apply_move(move, 'player')
+            if extra:
+                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, False)
+            else:
+                new_state.turn = 'bot'
+                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, True)
+            if eval_score < min_eval:
+                min_eval = eval_score
+                best_move = move
+            beta = min(beta, eval_score)
+            if beta <= alpha:
+                break
+        return min_eval, best_move
+
+# --- Giao diện trò chơi ---
+# GameFrame là khung chứa giao diện của bàn chơi
+class GameFrame(tk.Frame):
+    def __init__(self, parent, app, rows, cols, difficulty, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self.app = app
+        self.rows = rows
+        self.cols = cols
+        self.difficulty = difficulty
+        # Ánh xạ độ sâu tìm kiếm theo độ khó
+        self.depth = {"Easy": 2, "Medium": 4, "Hard": 6}.get(difficulty, 3)
+        self.state = GameState(rows, cols)
+        self.canvas_width = cols * CELL_SIZE + 2 * PADDING
+        self.canvas_height = rows * CELL_SIZE + 2 * PADDING
+
+        self.canvas = tk.Canvas(self, width=self.canvas_width, height=self.canvas_height, bg="white")
+        self.canvas.pack(pady=10)
+        self.canvas.bind("<Button-1>", self.on_click)
+
+        self.status_label = tk.Label(self, text="Lượt của bạn")
+        self.status_label.pack()
+
+        self.control_frame = tk.Frame(self)
+        self.control_frame.pack(pady=5)
+        self.menu_button = tk.Button(self.control_frame, text="Main Menu", command=self.go_to_menu)
+        self.menu_button.pack(side="left", padx=5)
+        self.restart_button = tk.Button(self.control_frame, text="Restart", command=self.restart_game)
+        self.restart_button.pack(side="left", padx=5)
+
+        self.draw_board()
+
+    def go_to_menu(self):
+        self.app.show_start_menu()
+
+    def restart_game(self):
+        self.app.show_game(self.rows, self.cols, self.difficulty)
+
+    def draw_board(self):
+        self.canvas.delete("all")
+        # Vẽ các điểm (dots)
+        for i in range(self.rows + 1):
+            for j in range(self.cols + 1):
+                x = PADDING + j * CELL_SIZE
+                y = PADDING + i * CELL_SIZE
+                self.canvas.create_oval(x - DOT_RADIUS, y - DOT_RADIUS,
+                                        x + DOT_RADIUS, y + DOT_RADIUS,
+                                        fill="black")
+        # Vẽ các đường ngang đã vẽ
+        for i in range(len(self.state.horiz)):
+            for j in range(len(self.state.horiz[0])):
+                if self.state.horiz[i][j]:
+                    x1 = PADDING + j * CELL_SIZE
+                    y1 = PADDING + i * CELL_SIZE
+                    x2 = PADDING + (j + 1) * CELL_SIZE
+                    self.canvas.create_line(x1, y1, x2, y1, width=2, fill="black")
+        # Vẽ các đường dọc đã vẽ
+        for i in range(len(self.state.vert)):
+            for j in range(len(self.state.vert[0])):
+                if self.state.vert[i][j]:
+                    x1 = PADDING + j * CELL_SIZE
+                    y1 = PADDING + i * CELL_SIZE
+                    y2 = PADDING + (i + 1) * CELL_SIZE
+                    self.canvas.create_line(x1, y1, x1, y2, width=2, fill="black")
+        # Vẽ các ô vuông đã chiếm
+        for i in range(self.rows):
+            for j in range(self.cols):
+                if self.state.boxes[i][j] is not None:
+                    x1 = PADDING + j * CELL_SIZE
+                    y1 = PADDING + i * CELL_SIZE
+                    x2 = PADDING + (j + 1) * CELL_SIZE
+                    y2 = PADDING + (i + 1) * CELL_SIZE
+                    color = "lightblue" if self.state.boxes[i][j] == 'player' else "pink"
+
+                    # Thêm một khoảng bù để không đè lên đường line
+                    offset = 3  
+                    self.canvas.create_rectangle(
+                        x1 + offset, y1 + offset,
+                        x2 - offset, y2 - offset,
+                        fill=color,
+                        outline=""  # hoặc outline=color nếu muốn có viền cùng màu
+                    )
+
+
+    def on_click(self, event):
+        if self.state.turn != 'player':
+            return
+        x, y = event.x, event.y
+        clicked_move = None
+        tolerance = 10
+        # Kiểm tra vùng click cho đường ngang
+        for i in range(len(self.state.horiz)):
+            for j in range(len(self.state.horiz[0])):
+                if not self.state.horiz[i][j]:
+                    x1 = PADDING + j * CELL_SIZE
+                    y1 = PADDING + i * CELL_SIZE
+                    x2 = PADDING + (j + 1) * CELL_SIZE
+                    mx = (x1 + x2) / 2
+                    my = y1
+                    if abs(x - mx) < CELL_SIZE / 2 and abs(y - my) < tolerance:
+                        clicked_move = ("h", i, j)
+                        break
+            if clicked_move:
+                break
+        # Nếu chưa click được vào đường ngang, kiểm tra đường dọc
+        if not clicked_move:
+            for i in range(len(self.state.vert)):
+                for j in range(len(self.state.vert[0])):
+                    if not self.state.vert[i][j]:
+                        x1 = PADDING + j * CELL_SIZE
+                        y1 = PADDING + i * CELL_SIZE
+                        y2 = PADDING + (i + 1) * CELL_SIZE
+                        mx = x1
+                        my = (y1 + y2) / 2
+                        if abs(x - mx) < tolerance and abs(y - my) < CELL_SIZE / 2:
+                            clicked_move = ("v", i, j)
+                            break
+                if clicked_move:
+                    break
+        if clicked_move:
+            extra = self.state.apply_move(clicked_move, 'player')
+            self.draw_board()
+            if self.state.is_game_over():
+                self.end_game()
+                return
+            if extra:
+                self.status_label.config(text="Bạn chiếm được ô, tiếp tục lượt của bạn!")
+            else:
+                self.state.turn = 'bot'
+                self.status_label.config(text="Bot đang tính toán...")
+                self.after(500, self.bot_move)
+        else:
+            print("Click không hợp lệ.")
+
+    def bot_move(self):
+        # Bot tính toán nước đi bằng minimax với độ sâu đã chọn
+        _, best_move = minimax(self.state, self.depth, -math.inf, math.inf, True)
+
+        if best_move is None:
+            return
+        extra = self.state.apply_move(best_move, 'bot')
+        self.draw_board()
+        if self.state.is_game_over():
+            self.end_game()
+            return
+        if extra:
+            self.status_label.config(text="Bot chiếm được ô và được tiếp tục lượt!")
+            self.after(500, self.bot_move)
+        else:
+            self.state.turn = 'player'
+            self.status_label.config(text="Lượt của bạn")
+
+    def end_game(self):
+        if self.state.player_score > self.state.bot_score:
+            result = "Bạn thắng!"
+        elif self.state.player_score < self.state.bot_score:
+            result = "Bot thắng!"
+        else:
+            result = "Hòa!"
+        self.status_label.config(text=f"Trò chơi kết thúc. {result}")
+        self.canvas.unbind("<Button-1>")
+
+# --- Giao diện Start Menu ---
+class StartMenuFrame(tk.Frame):
+    def __init__(self, parent, app, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self.app = app
+        self.title_label = tk.Label(self, text="Dots and Boxes", font=("Helvetica", 24))
+        self.title_label.pack(pady=40)
+        
+        # Chọn kích thước bàn cờ
+        size_frame = tk.Frame(self)
+        size_frame.pack(pady=20)
+        tk.Label(size_frame, text="Rows:").grid(row=0, column=0, padx=5, pady=5)
+        tk.Label(size_frame, text="Columns:").grid(row=1, column=0, padx=5, pady=5)
+        self.rows_var = tk.IntVar(value=3)
+        self.cols_var = tk.IntVar(value=3)
+        self.rows_spin = tk.Spinbox(size_frame, from_=3, to=9, textvariable=self.rows_var, width=5)
+        self.rows_spin.grid(row=0, column=1, padx=5, pady=5)
+        self.cols_spin = tk.Spinbox(size_frame, from_=3, to=9, textvariable=self.cols_var, width=5)
+        self.cols_spin.grid(row=1, column=1, padx=5, pady=5)
+        
+        # Chọn độ khó
+        diff_frame = tk.Frame(self)
+        diff_frame.pack(pady=20)
+        tk.Label(diff_frame, text="Difficulty:").pack(side="left", padx=5)
+        self.difficulty_var = tk.StringVar(value="Medium")
+        self.diff_option = tk.OptionMenu(diff_frame, self.difficulty_var, "Easy", "Medium", "Hard")
+        self.diff_option.pack(side="left", padx=5)
+        
+        self.start_button = tk.Button(self, text="Start Game", command=self.start_game)
+        self.start_button.pack(pady=20)
+
+    def start_game(self):
+        rows = self.rows_var.get()
+        cols = self.cols_var.get()
+        difficulty = self.difficulty_var.get()
+        self.app.show_game(rows, cols, difficulty)
+
+# --- Lớp quản lý các khung giao diện (Frames) ---
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Dots and Boxes")
+        self.resizable(False, False)
+        self.container = tk.Frame(self)
+        self.container.pack(fill="both", expand=True)
+        self.show_start_menu()
+
+    def clear_container(self):
+        for widget in self.container.winfo_children():
+            widget.destroy()
+
+    def show_start_menu(self):
+        self.clear_container()
+        start_menu = StartMenuFrame(self.container, self)
+        start_menu.pack(fill="both", expand=True)
+
+    def show_game(self, rows, cols, difficulty):
+        self.clear_container()
+        game_frame = GameFrame(self.container, self, rows, cols, difficulty)
+        game_frame.pack(fill="both", expand=True)
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
