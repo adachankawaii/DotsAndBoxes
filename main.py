@@ -4,9 +4,10 @@ import random
 import copy
 
 # --- Các hằng số toàn cục ---
-CELL_SIZE = 80    # Kích thước mỗi ô (pixel)
-PADDING = 20      # Khoảng cách biên của canvas
-DOT_RADIUS = 4    # Bán kính điểm
+CELL_SIZE = 60  # Kích thước mỗi ô (pixel)
+PADDING = 20  # Khoảng cách biên của canvas
+DOT_RADIUS = 6  # Bán kính điểm
+
 
 # --- Lớp lưu trữ trạng thái bàn chơi ---
 class GameState:
@@ -76,10 +77,10 @@ class GameState:
         if move_type == "h":
             # Kiểm tra ô phía trên (nếu có)
             if i > 0:
-                if (self.horiz[i-1][j] and self.vert[i-1][j] and 
-                    self.vert[i-1][j+1] and self.horiz[i][j]):
-                    if self.boxes[i-1][j] is None:
-                        self.boxes[i-1][j] = player
+                if (self.horiz[i - 1][j] and self.vert[i - 1][j] and
+                        self.vert[i - 1][j + 1] and self.horiz[i][j]):
+                    if self.boxes[i - 1][j] is None:
+                        self.boxes[i - 1][j] = player
                         completed_box = True
                         if player == 'player':
                             self.player_score += 1
@@ -87,8 +88,8 @@ class GameState:
                             self.bot_score += 1
             # Kiểm tra ô phía dưới (nếu có)
             if i < self.rows:
-                if (self.horiz[i][j] and self.vert[i][j] and 
-                    self.vert[i][j+1] and self.horiz[i+1][j]):
+                if (self.horiz[i][j] and self.vert[i][j] and
+                        self.vert[i][j + 1] and self.horiz[i + 1][j]):
                     if self.boxes[i][j] is None:
                         self.boxes[i][j] = player
                         completed_box = True
@@ -99,10 +100,10 @@ class GameState:
         else:  # Nước đi là đường dọc
             # Kiểm tra ô bên trái (nếu có)
             if j > 0:
-                if (self.vert[i][j-1] and self.horiz[i][j-1] and 
-                    self.horiz[i+1][j-1] and self.vert[i][j]):
-                    if self.boxes[i][j-1] is None:
-                        self.boxes[i][j-1] = player
+                if (self.vert[i][j - 1] and self.horiz[i][j - 1] and
+                        self.horiz[i + 1][j - 1] and self.vert[i][j]):
+                    if self.boxes[i][j - 1] is None:
+                        self.boxes[i][j - 1] = player
                         completed_box = True
                         if player == 'player':
                             self.player_score += 1
@@ -110,8 +111,8 @@ class GameState:
                             self.bot_score += 1
             # Kiểm tra ô bên phải (nếu có)
             if j < self.cols:
-                if (self.vert[i][j] and self.horiz[i][j] and 
-                    self.horiz[i+1][j] and self.vert[i][j+1]):
+                if (self.vert[i][j] and self.horiz[i][j] and
+                        self.horiz[i + 1][j] and self.vert[i][j + 1]):
                     if self.boxes[i][j] is None:
                         self.boxes[i][j] = player
                         completed_box = True
@@ -124,6 +125,7 @@ class GameState:
             extra_move = True
         return extra_move
 
+
 # --- Hàm đánh giá trạng thái (heuristic) ---
 def evaluate_state(state):
     # Hiệu số điểm hiện tại
@@ -135,11 +137,11 @@ def evaluate_state(state):
                 drawn = 0
                 if state.horiz[i][j]:
                     drawn += 1
-                if state.horiz[i+1][j]:
+                if state.horiz[i + 1][j]:
                     drawn += 1
                 if state.vert[i][j]:
                     drawn += 1
-                if state.vert[i][j+1]:
+                if state.vert[i][j + 1]:
                     drawn += 1
                 if drawn == 3:
                     bonus = 2.0
@@ -148,6 +150,7 @@ def evaluate_state(state):
                     bonus = 0.5
                     score += bonus if state.turn == 'bot' else -bonus
     return score
+
 
 # --- Thuật toán minimax với alpha-beta pruning ---
 def minimax(state, depth, alpha, beta, maximizing_player):
@@ -192,6 +195,7 @@ def minimax(state, depth, alpha, beta, maximizing_player):
                 break
         return min_eval, best_move
 
+
 # --- Giao diện trò chơi ---
 # GameFrame là khung chứa giao diện của bàn chơi
 class GameFrame(tk.Frame):
@@ -201,14 +205,14 @@ class GameFrame(tk.Frame):
         self.rows = rows
         self.cols = cols
         self.difficulty = difficulty
-        # Ánh xạ độ sâu tìm kiếm theo độ khó
         self.depth = {"Easy": 2, "Medium": 4, "Hard": 6}.get(difficulty, 3)
         self.state = GameState(rows, cols)
-        self.canvas_width = cols * CELL_SIZE + 2 * PADDING
-        self.canvas_height = rows * CELL_SIZE + 2 * PADDING
+
+        self.canvas_width = cols * CELL_SIZE + 4 * PADDING
+        self.canvas_height = rows * CELL_SIZE + 4 * PADDING
 
         self.canvas = tk.Canvas(self, width=self.canvas_width, height=self.canvas_height, bg="white")
-        self.canvas.pack(pady=10)
+        self.canvas.pack(expand=True)
         self.canvas.bind("<Button-1>", self.on_click)
 
         self.status_label = tk.Label(self, text="Lượt của bạn")
@@ -221,6 +225,9 @@ class GameFrame(tk.Frame):
         self.restart_button = tk.Button(self.control_frame, text="Restart", command=self.restart_game)
         self.restart_button.pack(side="left", padx=5)
 
+        self.animated_boxes = set()
+        self.background_rect = self.canvas.create_rectangle(0, 0, self.canvas_width, self.canvas_height, fill="white",
+                                                            outline="")
         self.draw_board()
 
     def go_to_menu(self):
@@ -231,6 +238,16 @@ class GameFrame(tk.Frame):
 
     def draw_board(self):
         self.canvas.delete("all")
+        # Vẽ các ô vuông đã chiếm
+        for i in range(self.rows):
+            for j in range(self.cols):
+                if self.state.boxes[i][j] is not None and not hasattr(self, 'animated_boxes'):
+                    self.animated_boxes = set()
+                if self.state.boxes[i][j] is not None and (i, j) not in self.animated_boxes:
+                    self.animated_boxes.add((i, j))
+                    self.animate_box(i, j, self.state.boxes[i][j])
+                elif self.state.boxes[i][j] is not None:
+                    self.draw_final_box(i, j, self.state.boxes[i][j])
         # Vẽ các điểm (dots)
         for i in range(self.rows + 1):
             for j in range(self.cols + 1):
@@ -242,38 +259,61 @@ class GameFrame(tk.Frame):
         # Vẽ các đường ngang đã vẽ
         for i in range(len(self.state.horiz)):
             for j in range(len(self.state.horiz[0])):
+                x1 = PADDING + j * CELL_SIZE
+                y1 = PADDING + i * CELL_SIZE
+                x2 = PADDING + (j + 1) * CELL_SIZE
                 if self.state.horiz[i][j]:
-                    x1 = PADDING + j * CELL_SIZE
-                    y1 = PADDING + i * CELL_SIZE
-                    x2 = PADDING + (j + 1) * CELL_SIZE
-                    self.canvas.create_line(x1, y1, x2, y1, width=2, fill="black")
-        # Vẽ các đường dọc đã vẽ
+                    self.canvas.create_line(x1, y1, x2, y1, width=4, fill="black")
+                else:
+                    self.canvas.create_line(x1, y1, x2, y1, width=4, fill="gray", dash=(4, 4))
+
         for i in range(len(self.state.vert)):
             for j in range(len(self.state.vert[0])):
+                x1 = PADDING + j * CELL_SIZE
+                y1 = PADDING + i * CELL_SIZE
+                y2 = PADDING + (i + 1) * CELL_SIZE
                 if self.state.vert[i][j]:
-                    x1 = PADDING + j * CELL_SIZE
-                    y1 = PADDING + i * CELL_SIZE
-                    y2 = PADDING + (i + 1) * CELL_SIZE
-                    self.canvas.create_line(x1, y1, x1, y2, width=2, fill="black")
-        # Vẽ các ô vuông đã chiếm
-        for i in range(self.rows):
-            for j in range(self.cols):
-                if self.state.boxes[i][j] is not None:
-                    x1 = PADDING + j * CELL_SIZE
-                    y1 = PADDING + i * CELL_SIZE
-                    x2 = PADDING + (j + 1) * CELL_SIZE
-                    y2 = PADDING + (i + 1) * CELL_SIZE
-                    color = "lightblue" if self.state.boxes[i][j] == 'player' else "pink"
+                    self.canvas.create_line(x1, y1, x1, y2, width=4, fill="black")
+                else:
+                    self.canvas.create_line(x1, y1, x1, y2, width=4, fill="gray", dash=(4, 4))
 
-                    # Thêm một khoảng bù để không đè lên đường line
-                    offset = 3  
-                    self.canvas.create_rectangle(
-                        x1 + offset, y1 + offset,
-                        x2 - offset, y2 - offset,
-                        fill=color,
-                        outline=""  # hoặc outline=color nếu muốn có viền cùng màu
-                    )
+    def animate_box(self, i, j, owner, progress=0):
+        if progress > 0.5:
+            self.draw_final_box(i, j, owner)
+            return
+        x1 = PADDING + j * CELL_SIZE
+        y1 = PADDING + i * CELL_SIZE
+        x2 = PADDING + (j + 1) * CELL_SIZE
+        y2 = PADDING + (i + 1) * CELL_SIZE
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+        expand_x = (x2 - x1) * progress / 2
+        expand_y = (y2 - y1) * progress / 2
+        color = "lightblue" if owner == 'player' else "pink"
+        self.canvas.create_rectangle(mid_x - expand_x, mid_y - expand_y, mid_x + expand_x, mid_y + expand_y, fill=color,
+                                     outline="")
+        self.after(20, self.animate_box, i, j, owner, progress + 0.1)
 
+    def draw_final_box(self, i, j, owner):
+        x1 = PADDING + j * CELL_SIZE + 2
+        y1 = PADDING + i * CELL_SIZE + 2
+        x2 = PADDING + (j + 1) * CELL_SIZE - 2
+        y2 = PADDING + (i + 1) * CELL_SIZE - 2
+        color = "lightblue" if owner == 'player' else "pink"
+        self.canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline="black")
+
+    def animate_line(self, x1, y1, x2, y2, step=5, progress=0, color="black"):
+        if progress >= 1:
+            self.canvas.create_line(x1, y1, x2, y2, width=4, fill="black")
+            return
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+        xm1 = mid_x - (mid_x - x1) * progress
+        ym1 = mid_y - (mid_y - y1) * progress
+        xm2 = mid_x + (x2 - mid_x) * progress
+        ym2 = mid_y + (y2 - mid_y) * progress
+        self.canvas.create_line(xm1, ym1, xm2, ym2, width=4, fill=color)
+        self.after(20, self.animate_line, x1, y1, x2, y2, step, progress + 0.2, color)
 
     def on_click(self, event):
         if self.state.turn != 'player':
@@ -312,7 +352,16 @@ class GameFrame(tk.Frame):
                     break
         if clicked_move:
             extra = self.state.apply_move(clicked_move, 'player')
-            self.draw_board()
+            self.state.apply_move(clicked_move, 'player')
+            color = "blue" if self.state.turn == 'player' else "red"
+            if clicked_move[0] == "h":
+                x1, y1, x2, y2 = PADDING + clicked_move[2] * CELL_SIZE, PADDING + clicked_move[
+                    1] * CELL_SIZE, PADDING + (clicked_move[2] + 1) * CELL_SIZE, PADDING + clicked_move[1] * CELL_SIZE
+            else:
+                x1, y1, x2, y2 = PADDING + clicked_move[2] * CELL_SIZE, PADDING + clicked_move[1] * CELL_SIZE, PADDING + \
+                                 clicked_move[2] * CELL_SIZE, PADDING + (clicked_move[1] + 1) * CELL_SIZE
+            self.animate_line(x1, y1, x2, y2, color=color)
+            self.after(500, self.draw_board)
             if self.state.is_game_over():
                 self.end_game()
                 return
@@ -321,6 +370,7 @@ class GameFrame(tk.Frame):
             else:
                 self.state.turn = 'bot'
                 self.status_label.config(text="Bot đang tính toán...")
+
                 self.after(500, self.bot_move)
         else:
             print("Click không hợp lệ.")
@@ -332,7 +382,15 @@ class GameFrame(tk.Frame):
         if best_move is None:
             return
         extra = self.state.apply_move(best_move, 'bot')
-        self.draw_board()
+        color = "blue" if self.state.turn == 'player' else "red"
+        if best_move[0] == "h":
+            x1, y1, x2, y2 = PADDING + best_move[2] * CELL_SIZE, PADDING + best_move[1] * CELL_SIZE, PADDING + (
+                        best_move[2] + 1) * CELL_SIZE, PADDING + best_move[1] * CELL_SIZE
+        else:
+            x1, y1, x2, y2 = PADDING + best_move[2] * CELL_SIZE, PADDING + best_move[1] * CELL_SIZE, PADDING + \
+                             best_move[2] * CELL_SIZE, PADDING + (best_move[1] + 1) * CELL_SIZE
+        self.animate_line(x1, y1, x2, y2, color=color)
+        self.after(500, self.draw_board)
         if self.state.is_game_over():
             self.end_game()
             return
@@ -353,42 +411,79 @@ class GameFrame(tk.Frame):
         self.status_label.config(text=f"Trò chơi kết thúc. {result}")
         self.canvas.unbind("<Button-1>")
 
+
 # --- Giao diện Start Menu ---
+import tkinter as tk
+from tkinter import ttk
+
+
 class StartMenuFrame(tk.Frame):
     def __init__(self, parent, app, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.app = app
-        self.title_label = tk.Label(self, text="Dots and Boxes", font=("Helvetica", 24))
-        self.title_label.pack(pady=40)
-        
-        # Chọn kích thước bàn cờ
-        size_frame = tk.Frame(self)
-        size_frame.pack(pady=20)
-        tk.Label(size_frame, text="Rows:").grid(row=0, column=0, padx=5, pady=5)
-        tk.Label(size_frame, text="Columns:").grid(row=1, column=0, padx=5, pady=5)
+
+        # Tạo khung chứa toàn bộ menu để căn giữa
+        container = tk.Frame(self, bg="#f0f0f0")
+        container.pack(expand=True, padx=20, pady=20)
+
+        # Tiêu đề
+        self.title_label = tk.Label(container, text="Dots and Boxes", font=("Helvetica", 28, "bold"), bg="#f0f0f0")
+        self.title_label.pack(pady=30)
+
+        # Khung chọn kích thước bàn cờ
+        size_frame = ttk.LabelFrame(container, text="Board Size", padding=10)
+        size_frame.pack(pady=15, fill="x", padx=20)
+        ttk.Label(size_frame, text="Rows:").grid(row=0, column=0, padx=5, pady=5)
+        ttk.Label(size_frame, text="Columns:").grid(row=1, column=0, padx=5, pady=5)
         self.rows_var = tk.IntVar(value=3)
         self.cols_var = tk.IntVar(value=3)
-        self.rows_spin = tk.Spinbox(size_frame, from_=3, to=9, textvariable=self.rows_var, width=5)
+        self.rows_spin = ttk.Spinbox(size_frame, from_=3, to=9, textvariable=self.rows_var, width=5)
         self.rows_spin.grid(row=0, column=1, padx=5, pady=5)
-        self.cols_spin = tk.Spinbox(size_frame, from_=3, to=9, textvariable=self.cols_var, width=5)
+        self.cols_spin = ttk.Spinbox(size_frame, from_=3, to=9, textvariable=self.cols_var, width=5)
         self.cols_spin.grid(row=1, column=1, padx=5, pady=5)
-        
-        # Chọn độ khó
-        diff_frame = tk.Frame(self)
-        diff_frame.pack(pady=20)
-        tk.Label(diff_frame, text="Difficulty:").pack(side="left", padx=5)
-        self.difficulty_var = tk.StringVar(value="Medium")
-        self.diff_option = tk.OptionMenu(diff_frame, self.difficulty_var, "Easy", "Medium", "Hard")
-        self.diff_option.pack(side="left", padx=5)
-        
-        self.start_button = tk.Button(self, text="Start Game", command=self.start_game)
+
+        # Khung chọn độ khó
+        diff_frame = ttk.LabelFrame(container, text="Difficulty Level", padding=10)
+        diff_frame.pack(pady=15, fill="x", padx=20)
+        self.difficulty_var = tk.StringVar(value="Easy")
+        self.diff_option = ttk.Combobox(diff_frame, textvariable=self.difficulty_var, values=["Easy", "Medium", "Hard"],
+                                        state="readonly")
+        self.diff_option.pack(pady=5, padx=10)
+        self.diff_option.current(1)
+
+        # Thêm phần trang trí
+        self.info_label = tk.Label(container, text="Select board size and difficulty to start playing.",
+                                   font=("Helvetica", 12), bg="#f0f0f0")
+        self.info_label.pack(pady=10)
+
+        # Thêm nút About
+        self.about_button = tk.Button(container, text="About", font=("Helvetica", 10, "bold"), bg="#008CBA", fg="white",
+                                      relief="ridge", bd=3, padx=10, pady=5, borderwidth=5, highlightthickness=2,
+                                      command=self.show_about)
+        self.about_button.pack(pady=5)
+
+        # Nút bắt đầu
+        self.start_button = tk.Button(container, text="Start Game", command=self.start_game,
+                                      font=("Helvetica", 12, "bold"), bg="#4CAF50", fg="white", relief="ridge", bd=3,
+                                      padx=10, pady=5, borderwidth=5, highlightthickness=2)
         self.start_button.pack(pady=20)
 
     def start_game(self):
+        global CELL_SIZE
         rows = self.rows_var.get()
         cols = self.cols_var.get()
+        CELL_SIZE = 9 / max(rows, cols) * 60  # Tính toán lại kích thước ô
         difficulty = self.difficulty_var.get()
         self.app.show_game(rows, cols, difficulty)
+
+    def show_about(self):
+        about_window = tk.Toplevel(self)
+        about_window.title("About")
+        about_window.geometry("300x200")
+        tk.Label(about_window, text="Dots and Boxes Game", font=("Helvetica", 14, "bold")).pack(pady=10)
+        tk.Label(about_window, text="Developed with Python & Tkinter", font=("Helvetica", 10)).pack(pady=5)
+        tk.Label(about_window, text="A product for researching algorithm", font=("Helvetica", 10)).pack(pady=5)
+
 
 # --- Lớp quản lý các khung giao diện (Frames) ---
 class App(tk.Tk):
@@ -396,6 +491,17 @@ class App(tk.Tk):
         super().__init__()
         self.title("Dots and Boxes")
         self.resizable(False, False)
+
+        # Lấy kích thước màn hình
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        size = screen_width // 2  # Kích thước cửa sổ bằng 1/2 chiều rộng màn hình
+
+        # Căn giữa cửa sổ
+        x_position = (screen_width - size) // 2
+        y_position = (screen_height - size - 50) // 2
+        self.geometry(f"{size}x{size}+{x_position}+{y_position}")
+
         self.container = tk.Frame(self)
         self.container.pack(fill="both", expand=True)
         self.show_start_menu()
@@ -413,6 +519,7 @@ class App(tk.Tk):
         self.clear_container()
         game_frame = GameFrame(self.container, self, rows, cols, difficulty)
         game_frame.pack(fill="both", expand=True)
+
 
 if __name__ == "__main__":
     app = App()
