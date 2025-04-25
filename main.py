@@ -1,11 +1,13 @@
 import tkinter as tk
 import math
-import random
 import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from collections import deque
+import torch.nn.functional as F
+import random
+import numpy as np
+
 from DQN import DQN, PrioritizedReplayBuffer
 import numpy as np
 # --- Các hằng số toàn cục ---
@@ -45,9 +47,6 @@ class GameState:
         possible_moves, full_moves = self.get_possible_moves()
         move = full_moves[action]
         
-        # Save old scores before move
-        old_bot_score = self.bot_score
-        old_player_score = self.player_score
 
         # Apply move based on turn
         if turn == 0:
@@ -55,62 +54,16 @@ class GameState:
         else:
             extra_move = self.apply_move(move, 'player')
         
-        reward = 0
-        '''''
-        # Additional reward rules for bot moves
-        if turn == 0:
-            # Award 0.1 for each box captured this move
-            new_boxes_captured = self.bot_score - old_bot_score
-            reward += 0.4 * new_boxes_captured
-            
-            # Penalize 0.1 for each dangerous box created (unclaimed box with 3 edges)
-            dangerous_penalty = 0.0
-            for i in range(self.rows):
-                for j in range(self.cols):
-                    if self.boxes[i][j] is None:
-                        # Count edges of the box
-                        edges = 0
-                        if self.horiz[i][j]:
-                            edges += 1
-                        if self.horiz[i+1][j]:
-                            edges += 1
-                        if self.vert[i][j]:
-                            edges += 1
-                        if self.vert[i][j+1]:
-                            edges += 1
-                        if edges == 3:
-                            dangerous_penalty += 0.5
-            if not extra_move:
-                reward -= dangerous_penalty
+        reward = self.evaluate_state(turn if extra_move else (1-turn))   # Đánh giá trạng thái sau khi thực hiện nước đi
+        
+        if not extra_move:
+            if turn == 0:
+                self.turn = 'player'
+                reward += 0.5
             else:
-                reward += dangerous_penalty
-        else:
-            # Award 0.1 for each box captured this move
-            new_boxes_captured = self.player_score - old_player_score
-            reward += 0.4 * new_boxes_captured
-            
-            # Penalize 0.1 for each dangerous box created (unclaimed box with 3 edges)
-            dangerous_penalty = 0.0
-            for i in range(self.rows):
-                for j in range(self.cols):
-                    if self.boxes[i][j] is None:
-                        # Count edges of the box
-                        edges = 0
-                        if self.horiz[i][j]:
-                            edges += 1
-                        if self.horiz[i+1][j]:
-                            edges += 1
-                        if self.vert[i][j]:
-                            edges += 1
-                        if self.vert[i][j+1]:
-                            edges += 1
-                        if edges == 3:
-                            dangerous_penalty += 0.5
-            if not extra_move:
-                reward -= dangerous_penalty
-            else:
-                reward += dangerous_penalty
-        '''''
+                self.turn = 'bot'
+                reward += 0.5
+            turn = 1 - turn  # Chuyển lượt cho người chơi khác
         # Check if the game is over
         done = self.is_game_over()
 
@@ -124,17 +77,9 @@ class GameState:
                 player_score = np.sum(self.boxes == 'bot')
             
             if bot_score > player_score:
-                reward += 5.0
+                reward += 10.0
             elif bot_score < player_score:
-                reward -= 5.0
-            return self.get_normalized_state(), reward, done  
-
-        # Switch turn if no extra move is awarded
-        if not extra_move:
-            if turn == 0:
-                self.turn = 'player'
-            else:
-                self.turn = 'bot'
+                reward += -10.0
 
         return self.get_normalized_state(), reward, done
 
@@ -269,32 +214,33 @@ class GameState:
         if completed_box:
             extra_move = True
         return extra_move
-    def evaluate_state(self):
+    def evaluate_state(self, turn):
         """
         Đánh giá trạng thái hiện tại của trò chơi theo quan điểm của bot.
         Trả về một số thực, số dương nếu bot có lợi, số âm nếu bot gặp bất lợi.
         """
-        score_diff = self.bot_score - self.player_score  # Chênh lệch điểm số
+        score = self.player_score - self.bot_score  # Hiệu số điểm hiện tại
         
+        if turn == 0:
+            bot = 'bot'
+            score = -score  # Đảo ngược điểm số nếu không phải lượt của bot
+        else:
+            bot = 'player'
+             
         immediate_boxes = 0.0  # Số ô có thể hoàn thành ngay lập tức
         dangerous_boxes = 0.0  # Số ô nguy hiểm có thể bị chiếm bởi đối thủ
-
+        
         for r in range(self.rows):
             for c in range(self.cols):
                 edges = sum([self.horiz[r][c], self.horiz[r+1][c], self.vert[r][c], self.vert[r][c+1]])
                 
                 if edges == 3:  # Ô có 3 cạnh đã được đánh dấu -> Có thể hoàn thành ngay
-                    if self.turn == 'bot':
-                        immediate_boxes += 1.0
+                    if self.turn == bot:
+                        immediate_boxes = 1.0
                     else:
-                        dangerous_boxes += 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
-
-        # Trọng số: 
-        # - Điểm số quan trọng nhất
-        # - Ưu tiên ô có thể chiếm ngay
-        # - Tránh đặt vào ô nguy hiểm
-        return score_diff + immediate_boxes - dangerous_boxes * 2
-
+                        dangerous_boxes = 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
+        score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
+        return score
 
 # --- Hàm đánh giá trạng thái (heuristic) ---
 def evaluate_state(state):
@@ -388,33 +334,27 @@ def move_to_action(move, grid_size):
     elif move_type == "v":
         return (grid_size + 1) * grid_size + i * (grid_size + 1) + j  # Chỉ số trong phần `vert`
 
-
-
 def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
-    champ_optimizer = optim.Adam(champion_model.parameters(), lr=0.0005, weight_decay=1e-5)
-    chall_optimizer = optim.Adam(challenger_model.parameters(), lr=0.001, weight_decay=1e-5)
-    shared_memory = PrioritizedReplayBuffer(100000)
-
+    champ_optimizer = optim.Adam(champion_model.parameters(), lr=8e-5, weight_decay=1e-5)
+    chall_optimizer = optim.Adam(challenger_model.parameters(), lr=1e-4, weight_decay=1e-5)
+    champ_memory = PrioritizedReplayBuffer(50000)
+    chall_memory = PrioritizedReplayBuffer(50000)
+    
     epsilon = 1.0
     epsilon_min = 0.15
     gamma = 0.95
     beta = 0.4
-
     champ_target = copy.deepcopy(champion_model)
     chall_target = copy.deepcopy(challenger_model)
 
     target_update_frequency = 50
-    champion_update_frequency = 200
+    champion_update_frequency = 100
     num_eval_games = 200
-    champion_win_threshold = 0.50
-
+    champion_win_threshold = 0.60
+    f_loss = 0.0
     win_count_champ = 0
     win_count_chall = 0
     sum_loss = 0.0
-
-    # Lưu danh sách challenger cũ
-    challenger_history = [copy.deepcopy(challenger_model)]
-    max_challengers = 999999 # Số challenger tối đa lưu trữ
 
     for episode in range(num_episodes):
         state = env.reset()
@@ -428,26 +368,31 @@ def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
 
             if env.turn == 'bot':
                 model, target_model, optimizer = champion_model, champ_target, champ_optimizer
+                shared_memory = champ_memory
             else:
-                # Chọn challenger ngẫu nhiên từ danh sách cũ
-                challenger_model = random.choice(challenger_history)
                 model, target_model, optimizer = challenger_model, chall_target, chall_optimizer
+                shared_memory = chall_memory
+            
 
-            if random.random() < epsilon:
+            rnd = random.random()
+            if rnd < epsilon:
+                # 1. Random action
                 action = random.choice(valid_action_indices)
+
             else:
+                # 3. Softmax sampling from DQN
                 with torch.no_grad():
                     state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
                     q_values = model(state_tensor).squeeze(0)
                     mask = torch.tensor([m is not None for m in full_moves], dtype=torch.bool)
                     q_values[~mask] = -float('inf')
-                    T = max(0.2, epsilon)
+                    T = max(0.15, epsilon)
                     probs = torch.nn.functional.softmax(q_values / T, dim=0)
                     action = torch.multinomial(probs, 1).item()
 
             turn_indicator = 0 if env.turn == 'bot' else 1
             next_state, reward, done = env.step(action, turn_indicator)
-            reward = np.tanh(reward)
+           
             shared_memory.push(state, action, reward, next_state, done)
             state = next_state
 
@@ -460,33 +405,26 @@ def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
                 batch = shared_memory.sample(64, beta)
                 states, actions, rewards, next_states, dones, weights, indices = batch
 
+                q_pred = model(states).gather(1, actions.unsqueeze(1)).squeeze()
+                # Q = r + gamma * Q(s', a')
+                # Target từ target model
                 with torch.no_grad():
-                    next_q_values_online = model(next_states)
-                    next_actions = torch.argmax(next_q_values_online, dim=1)
-                    next_q_values_target = target_model(next_states).gather(1, next_actions.unsqueeze(1)).squeeze()
-                    target_values = rewards + gamma * next_q_values_target * (1 - dones)
+                    next_q_values = target_model(next_states)
+                    next_actions = torch.argmax(model(next_states), dim=1)
+                    next_q = next_q_values.gather(1, next_actions.unsqueeze(1)).squeeze()
+                    q_target = rewards + gamma * next_q * (1 - dones)
 
-                current_q_values = model(states)
-                target_q_vector = current_q_values.clone()
-                target_q_vector[torch.arange(current_q_values.shape[0]), actions] = target_values
-
-                td_errors = target_q_vector[torch.arange(current_q_values.shape[0]), actions] - \
-                            current_q_values[torch.arange(current_q_values.shape[0]), actions]
-
-                per_sample_loss = torch.nn.functional.smooth_l1_loss(
-                    current_q_values[torch.arange(current_q_values.shape[0]), actions],
-                    target_q_vector[torch.arange(current_q_values.shape[0]), actions],
-                    reduction='none'
-                )
+                td_errors = q_pred - q_target
+                per_sample_loss = F.smooth_l1_loss(q_pred, q_target, reduction='none')
                 loss = (per_sample_loss * weights).mean()
                 sum_loss += loss.item()
+                f_loss = loss.item()
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
                 optimizer.step()
 
                 shared_memory.update_priorities(indices, td_errors.abs().detach().numpy())
-
+        
         champ_score = np.sum(env.boxes == 'bot')
         chall_score = np.sum(env.boxes == 'player')
         if champ_score > chall_score:
@@ -499,34 +437,27 @@ def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
         else:
             epsilon = max(epsilon_min, epsilon * 0.9999)
         beta = min(1.0, beta + 0.0001)
-
+        
         if episode % target_update_frequency == 0:
-            soft_update(champ_target, champion_model, tau=0.1)
-            soft_update(chall_target, challenger_model, tau=0.1)
-            with torch.no_grad():
-                sample_state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
-                q_vals = champion_model(sample_state)
-                avg_q_value = champion_model(sample_state).mean().item()
-                t = torch.argmax(q_vals).item()
-                print(f"Episode {episode}: Champ Avg Q = {avg_q_value:.4f}, Max index = {t}, Epsilon = {epsilon:.4f}, Loss = {sum_loss:.4f}, Memory = {len(shared_memory.buffer)}")
-            sum_loss = 0.0
-
+            print(f"Episode {episode}: Epsilon = {epsilon:.4f}, Loss = {sum_loss:.4f},Final Loss = {f_loss: .4f} Memory = {len(shared_memory.buffer)}")
+            soft_update(champ_target, champion_model, tau=1)
+            soft_update(chall_target, challenger_model, tau=1)
         if (episode + 1) % champion_update_frequency == 0:
             win_rate = win_count_chall / (win_count_champ + win_count_chall)
-            if len(challenger_history) >= max_challengers:
-                    challenger_history.pop(0)
-            challenger_history.append(copy.deepcopy(challenger_model))
+            
             print(f"After {episode+1} episodes: Challenger win rate = {win_rate:.2f}: Champ = {win_count_champ}; Chall = {win_count_chall}")
             if win_rate > champion_win_threshold:
                 print("Updating champion with challenger weights...")
-                soft_update(champion_model, challenger_model, tau=0.01)
-                champ_optimizer = optim.Adam(champion_model.parameters(), lr=0.0003, weight_decay=1e-5)
+                soft_update(champion_model, challenger_model, tau=0.1)
                 soft_update(champ_target, champion_model, tau=0.1)
 
                 win_count_champ = win_count_chall = 0
             else:
                 win_count_champ = win_count_chall = 0
-
+        sum_loss = 0.0
+    
+    create_chart(champion_model, "Minimax")
+    create_chart(challenger_model, "Random")
     return champion_model
 
 
@@ -548,12 +479,107 @@ def get_best_dqn_move(env, model):
         q_values = model(state)  # Q-values của tất cả 24 hành động
         q_values[~mask] = -float('inf')
         action = torch.argmax(q_values).item()
-    print(action)
     if not mask[action]:
         print("random")
         return random.choice(possible_moves)
     return full_moves[action]
+import matplotlib.pyplot as plt
 
+def simulate_game_random(model, rows=3, cols=3):
+    """
+    Simulate a game where both the bot and its opponent select moves randomly.
+    The bot is marked as "bot" and the opponent as "player".
+    """
+    state_obj = GameState(rows, cols)
+    state_obj.reset()
+    while not state_obj.is_game_over():
+        if state_obj.turn == "bot":
+            # Bot uses minimax. If minimax returns no move, fallback to random choice.
+            move = get_best_dqn_move(state_obj, model)
+        else:
+            possible_moves, _ = state_obj.get_possible_moves()
+            move = random.choice(possible_moves)
+            
+        extra = state_obj.apply_move(move, state_obj.turn)
+        if not extra:
+            state_obj.turn = "player" if state_obj.turn == "bot" else "bot"
+    
+    bot_score = np.sum(state_obj.boxes == "bot")
+    player_score = np.sum(state_obj.boxes == "player")
+    
+    if bot_score > player_score:
+        return 1  # Bot wins
+    elif bot_score < player_score:
+        return 0  # Opponent wins
+    else:
+        return 0.5  # Tie
+
+def simulate_game_minimax(model, rows=3, cols=3):
+    """
+    Simulate a game where the bot selects moves using the minimax algorithm with alpha-beta pruning.
+    The bot is marked as "bot" and its opponent selects moves randomly.
+    """
+    state_obj = GameState(rows, cols)
+    state_obj.reset()
+    
+    while not state_obj.is_game_over():
+        if state_obj.turn == "bot":
+            # Bot uses minimax. If minimax returns no move, fallback to random choice.
+            move = get_best_dqn_move(state_obj, model)
+        else:
+            _, move = minimax(state_obj, 1, -math.inf, math.inf, True)
+            if move is None:
+                possible_moves, _ = state_obj.get_possible_moves()
+                move = random.choice(possible_moves)
+            
+        extra = state_obj.apply_move(move, state_obj.turn)
+        if not extra:
+            state_obj.turn = "player" if state_obj.turn == "bot" else "bot"
+    
+    bot_score = np.sum(state_obj.boxes == "bot")
+    player_score = np.sum(state_obj.boxes == "player")
+    
+    if bot_score > player_score:
+        return 1  # Bot wins
+    elif bot_score < player_score:
+        return 0  # Opponent wins
+    else:
+        return 0.5  # Tie
+
+def create_chart(model, bot_type):
+    """
+    Create a chart showing the win rate over 100 simulated games.
+    The bot_type parameter determines which simulation to run:
+        - "DQN": uses the provided DQN model via get_best_dqn_move.
+        - "Minimax": uses the minimax algorithm.
+        - "Random": all moves are chosen randomly.
+    """
+    win_rate = 0.0
+    win_rates = []
+    num_games = 1000
+
+    for game in range(1, num_games + 1):
+        
+        if bot_type == "Minimax":
+            result = simulate_game_minimax(model, rows=3, cols=3)
+        elif bot_type == "Random":
+            result = simulate_game_random(model, rows=3, cols=3)
+        else:
+            raise ValueError("Unknown bot type")
+        
+        win_rate += result
+        current_rate = win_rate / game
+        win_rates.append(current_rate)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, num_games + 1), win_rates)
+    plt.xlabel("Number of Games")
+    plt.ylabel("Bot Win Rate")
+    plt.title(f"{bot_type} Bot Win Rate Over {num_games} Games")
+    plt.grid(True)
+    plt.show()
+
+# Create a DQN model instance (for a 3x3 board, state and action sizes are both 24)
 
 
 
@@ -715,7 +741,7 @@ class GameFrame(tk.Frame):
             extra = self.state.apply_move(clicked_move, 'player')
             self.state.apply_move(clicked_move, 'player')
             color = "blue" if self.state.turn == 'player' else "red"
-            print(clicked_move)
+            
             if clicked_move[0] == "h":
                 x1, y1, x2, y2 = PADDING + clicked_move[2] * CELL_SIZE, PADDING + clicked_move[
                     1] * CELL_SIZE, PADDING + (clicked_move[2] + 1) * CELL_SIZE, PADDING + clicked_move[1] * CELL_SIZE
@@ -748,6 +774,7 @@ class GameFrame(tk.Frame):
         # best_move = get_best_dqn_move(self.state, self.model)
         if best_move is None:
             return
+        
         extra = self.state.apply_move(best_move, 'bot')
         color = "blue" if self.state.turn == 'player' else "red"
         if best_move[0] == "h":
@@ -900,10 +927,13 @@ class App(tk.Tk):
     def show_game(self, rows, cols, difficulty):
         self.clear_container()
         game_frame = GameFrame(self.container, self, rows, cols, difficulty)
-        if self.model is None and difficulty == "Reinformcent Learning":
-            model1 = DQN(game_frame.state.state_size, game_frame.state.action_size)
-            model2 = DQN(game_frame.state.state_size, game_frame.state.action_size)
-            self.model = train_dqn(game_frame.state, model1,model2)
+        
+        if difficulty == "Reinforcement Learning":
+            if self.model is None:
+                model1 = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                model2 = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                self.model = train_dqn(game_frame.state, model1,model2)
+            
         game_frame.model = self.model
         
         game_frame.pack(fill="both", expand=True)

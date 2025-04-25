@@ -4,6 +4,14 @@ import torch.nn as nn
 import torch.optim as optim
 import random
 from collections import deque
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+import random
+import numpy as np
+import copy
+import math
+from collections import defaultdict
 class DQN(nn.Module):
     def __init__(self, state_size, action_size):
         super(DQN, self).__init__()
@@ -41,16 +49,31 @@ class PrioritizedReplayBuffer:
         self.position = 0
 
     def push(self, state, action, reward, next_state, done):
+            
         max_priority = self.priorities.max() if self.buffer else 1.0
         state_array = np.array(state)
 
-        # Kiểm tra trạng thái có giống với trạng thái đã có không
-        for idx in range(max(0, len(self.buffer) - 20), len(self.buffer)):
-            s, a, r, ns, d = self.buffer[idx]
-            if np.linalg.norm(state_array - np.array(s)) < self.similarity_threshold:
+        is_duplicate = False
+        recent_range = range(max(0, len(self.buffer) - 20), len(self.buffer))
+
+        for idx in recent_range:
+            old_state, old_action, old_reward, old_next_state, old_done = self.buffer[idx]
+            old_state_array = np.array(old_state)
+
+            # So sánh trạng thái hiện tại với trạng thái cũ
+            state_similar = np.linalg.norm(state_array - old_state_array) < self.similarity_threshold
+            action_same = (action == old_action)
+
+            # Nếu giống nhau cả trạng thái và hành động → cập nhật priority
+            if state_similar and action_same:
                 self.priorities[idx] = max(self.priorities[idx], max_priority)
-                return  
-        # Nếu buffer chưa đầy, thêm trạng thái mới vào
+                is_duplicate = True
+                break  # Chỉ cần 1 là đủ
+
+        if is_duplicate:
+            return  # Không thêm bản ghi mới nếu trùng
+
+        # Nếu không trùng → thêm vào buffer như bình thường
         if len(self.buffer) < self.capacity:
             self.buffer.append((state, action, reward, next_state, done))
         else:
@@ -58,6 +81,7 @@ class PrioritizedReplayBuffer:
 
         self.priorities[self.position] = max_priority
         self.position = (self.position + 1) % self.capacity
+
 
     def sample(self, batch_size, beta=0.4):
         if len(self.buffer) == 0:
