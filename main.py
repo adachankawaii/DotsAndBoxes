@@ -1,7 +1,15 @@
 import tkinter as tk
 import math
 import copy
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import random
+import numpy as np
 
+from DQN import DQN, PrioritizedReplayBuffer
+import numpy as np
 # --- Các hằng số toàn cục ---
 CELL_SIZE = 60  # Kích thước mỗi ô (pixel)
 PADDING = 20  # Khoảng cách biên của canvas
@@ -14,15 +22,17 @@ class GameState:
         self.rows = rows
         self.cols = cols
         # Ma trận các đường ngang: (rows+1) x cols
-        self.horiz = [[False for _ in range(cols)] for _ in range(rows + 1)]
+        self.horiz = np.array([[False for _ in range(cols)] for _ in range(rows + 1)])
         # Ma trận các đường dọc: rows x (cols+1)
-        self.vert = [[False for _ in range(cols + 1)] for _ in range(rows)]
+        self.vert = np.array([[False for _ in range(cols + 1)] for _ in range(rows)])
         # Ma trận ô vuông: rows x cols, None nếu chưa ai chiếm
-        self.boxes = [[None for _ in range(cols)] for _ in range(rows)]
+        self.boxes = np.array([[None for _ in range(cols)] for _ in range(rows)])
+        self.state_size = (rows + 1) * cols + rows * (cols + 1)
+        self.action_size = self.state_size
         self.player_score = 0
         self.bot_score = 0
         self.turn = 'player'  # lượt đầu tiên: người chơi
-
+    
     def clone(self):
         new_state = GameState(self.rows, self.cols)
         new_state.horiz = copy.deepcopy(self.horiz)
@@ -32,6 +42,52 @@ class GameState:
         new_state.bot_score = self.bot_score
         new_state.turn = self.turn
         return new_state
+     
+    def step(self, action, turn):
+        possible_moves, full_moves = self.get_possible_moves()
+        move = full_moves[action]
+        
+
+        # Apply move based on turn
+        if turn == 0:
+            extra_move = self.apply_move(move, 'bot')
+        else:
+            extra_move = self.apply_move(move, 'player')
+        
+        reward = self.evaluate_state(turn if extra_move else (1-turn))   # Đánh giá trạng thái sau khi thực hiện nước đi
+        
+        if not extra_move:
+            if turn == 0:
+                self.turn = 'player'
+                reward += 0.5
+            else:
+                self.turn = 'bot'
+                reward += 0.5
+            turn = 1 - turn  # Chuyển lượt cho người chơi khác
+        # Check if the game is over
+        done = self.is_game_over()
+
+        if done:
+            # Final reward based on outcome
+            if turn == 0:
+                bot_score = np.sum(self.boxes == 'bot')
+                player_score = np.sum(self.boxes == 'player')
+            else:
+                bot_score = np.sum(self.boxes == 'player')
+                player_score = np.sum(self.boxes == 'bot')
+            
+            if bot_score > player_score:
+                reward += 10.0
+            elif bot_score < player_score:
+                reward += -10.0
+
+        return self.get_normalized_state(), reward, done
+
+    def get_normalized_state(self):
+        state = self.get_state()
+        max_value = np.max(state)
+        return state / max_value if max_value > 0 else state
+
 
     def is_game_over(self):
         # Trò chơi kết thúc khi tất cả các đường đã được vẽ
@@ -45,18 +101,53 @@ class GameState:
 
     def get_possible_moves(self):
         moves = []
+        full_moves = []
         # Các bước đi: đường ngang định dạng ("h", i, j)
         for i in range(len(self.horiz)):
             for j in range(len(self.horiz[0])):
                 if not self.horiz[i][j]:
                     moves.append(("h", i, j))
+                    full_moves.append(("h", i, j))
+                else:
+                    full_moves.append(None)
         # Các bước đi: đường dọc định dạng ("v", i, j)
-        for i in range(len(self.vert)):
+        for i in range(len(self.vert)): 
             for j in range(len(self.vert[0])):
                 if not self.vert[i][j]:
                     moves.append(("v", i, j))
-        return moves
+                    full_moves.append(("v", i, j))
+                else:
+                    full_moves.append(None)
+        return moves, full_moves
+    def set_state_from_tensor(self, state):
+        """
+        Cập nhật trạng thái của GameState từ một danh sách hoặc tensor.
+        """
+        if isinstance(state, torch.Tensor):  # Nếu đầu vào là tensor, chuyển thành list
+            state = state.tolist()
 
+        if len(state) != self.state_size:
+            raise ValueError(f"Invalid state size: expected {self.state_size}, got {len(state)}")
+
+        # Tách các phần của state theo đúng cấu trúc của game
+        horiz_size = (self.rows + 1) * self.cols
+        vert_size = self.rows * (self.cols + 1)
+
+        flat_horiz = state[:horiz_size]
+        flat_vert = state[horiz_size:horiz_size + vert_size]
+
+        self.horiz = np.array(flat_horiz, dtype=bool).reshape((self.rows + 1, self.cols))
+        self.vert = np.array(flat_vert, dtype=bool).reshape((self.rows, self.cols + 1))
+
+    def get_state(self):
+        return np.concatenate((self.horiz.flatten(), self.vert.flatten())).astype(np.float32)
+    def reset(self):
+        self.horiz.fill(False)
+        self.vert.fill(False)
+        self.boxes.fill(None)
+        self.player_score = 0
+        self.bot_score = 0
+        return self.get_state()
     def apply_move(self, move, player):
         """
         Thực hiện nước đi:
@@ -123,15 +214,50 @@ class GameState:
         if completed_box:
             extra_move = True
         return extra_move
+    
+def evaluate_state(self, turn):
+    """
+    Đánh giá trạng thái hiện tại của trò chơi theo quan điểm của bot.
+    Trả về một số thực, số dương nếu bot có lợi, số âm nếu bot gặp bất lợi.
+    """
+    score = self.player_score - self.bot_score  # Hiệu số điểm hiện tại
+    
+    if turn == 0:
+        bot = 'bot'
+        score = -score  # Đảo ngược điểm số nếu không phải lượt của bot
+    else:
+        bot = 'player'
+            
+    immediate_boxes = 0.0  # Số ô có thể hoàn thành ngay lập tức
+    dangerous_boxes = 0.0  # Số ô nguy hiểm có thể bị chiếm bởi đối thủ
+    
+    for r in range(self.rows):
+        for c in range(self.cols):
+            edges = sum([self.horiz[r][c], self.horiz[r+1][c], self.vert[r][c], self.vert[r][c+1]])
+            
+            if edges == 3:  # Ô có 3 cạnh đã được đánh dấu -> Có thể hoàn thành ngay
+                if self.turn == bot:
+                    immediate_boxes = 1.0
+                else:
+                    dangerous_boxes = 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
+    score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
+    return score
 
-# Cập nhật evaluate_state để sử dụng các trọng số từ WEIGHTS
-def evaluate_state(state):
+# --- Hàm đánh giá trạng thái (heuristic) ---
+def evaluate_state_minimax(state):
     score = state.bot_score - state.player_score
+    
+    # Đánh giá chuỗi các ô (Chains)
+    chain_bonus = evaluate_chain(state)
+    score += chain_bonus
 
-    # --- Các heuristics cơ bản ---
-    score += evaluate_chain(state)
-    score += evaluate_potential(state)
-    score += evaluate_safety(state)
+    # Cân nhắc thêm “tiềm năng” chiếm ô
+    potential_bonus = evaluate_potential(state)
+    score += potential_bonus
+
+    # Đánh giá an toàn của các nước đi
+    safety_score = evaluate_safety(state)
+    score += safety_score
 
     return score
 
@@ -149,32 +275,22 @@ def evaluate_chain(state):
                     chain_bonus += 1 if state.turn == 'bot' else -1
     return chain_bonus
 
-def evaluate_potential(state):
+def evaluate_safety(state):
     """
-    Đánh giá tiềm năng chiếm ô: tính toán các ô chưa hoàn thành và khả năng chiếm ô của bot.
+    Đánh giá an toàn của các nước đi.
+    Nếu bot có thể tạo ra một nước đi an toàn mà không cho phép đối thủ chiếm ô dễ dàng.
     """
-    potential_bonus = 0
+    safety_score = 0
     for i in range(state.rows):
         for j in range(state.cols):
             if state.boxes[i][j] is None:
-                drawn = 0
-                if state.horiz[i][j]:
-                    drawn += 1
-                if state.horiz[i + 1][j]:
-                    drawn += 1
-                if state.vert[i][j]:
-                    drawn += 1
-                if state.vert[i][j + 1]:
-                    drawn += 1
+                # Kiểm tra xem nếu bot chiếm ô này, có tạo ra cơ hội cho đối thủ không.
+                if is_safe_move(state, i, j):
+                    safety_score += 1  # Nước đi an toàn được đánh giá cao hơn
+                else:
+                    safety_score -= 1  # Nếu là nước đi nguy hiểm, trừ điểm
 
-                # Đánh giá ô có 3 cạnh (sắp xếp thứ tự cao hơn)
-                if drawn == 3:
-                    bonus = 2.0
-                    potential_bonus += bonus if state.turn == 'bot' else -bonus
-                elif drawn == 2:
-                    bonus = 0.5
-                    potential_bonus += bonus if state.turn == 'bot' else -bonus
-    return potential_bonus
+    return safety_score
 
 def is_part_of_chain(state, i, j):
     """
@@ -202,23 +318,6 @@ def is_part_of_chain(state, i, j):
                 if drawn == 3:  # Nếu ô này có thể bị chiếm trong lượt tới
                     return True
     return False
-
-def evaluate_safety(state):
-    """
-    Đánh giá an toàn của các nước đi.
-    Nếu bot có thể tạo ra một nước đi an toàn mà không cho phép đối thủ chiếm ô dễ dàng.
-    """
-    safety_score = 0
-    for i in range(state.rows):
-        for j in range(state.cols):
-            if state.boxes[i][j] is None:
-                # Kiểm tra xem nếu bot chiếm ô này, có tạo ra cơ hội cho đối thủ không.
-                if is_safe_move(state, i, j):
-                    safety_score += 1  # Nước đi an toàn được đánh giá cao hơn
-                else:
-                    safety_score -= 1  # Nếu là nước đi nguy hiểm, trừ điểm
-
-    return safety_score
 
 def is_safe_move(state, i, j):
     """
@@ -248,15 +347,40 @@ def is_safe_move(state, i, j):
                     return False
     return True  # Nếu không có cơ hội cho đối thủ, nước đi này an toàn
 
+def evaluate_potential(state):
+    """
+    Đánh giá tiềm năng chiếm ô: tính toán các ô chưa hoàn thành và khả năng chiếm ô của bot.
+    """
+    potential_bonus = 0
+    for i in range(state.rows):
+        for j in range(state.cols):
+            if state.boxes[i][j] is None:
+                drawn = 0
+                if state.horiz[i][j]:
+                    drawn += 1
+                if state.horiz[i + 1][j]:
+                    drawn += 1
+                if state.vert[i][j]:
+                    drawn += 1
+                if state.vert[i][j + 1]:
+                    drawn += 1
 
+                # Đánh giá ô có 3 cạnh (sắp xếp thứ tự cao hơn)
+                if drawn == 3:
+                    bonus = 2.0
+                    potential_bonus += bonus if state.turn == 'bot' else -bonus
+                elif drawn == 2:
+                    bonus = 0.5
+                    potential_bonus += bonus if state.turn == 'bot' else -bonus
+    return potential_bonus
 
 
 # --- Thuật toán minimax với alpha-beta pruning ---
 def minimax(state, depth, alpha, beta, maximizing_player):
     if depth == 0 or state.is_game_over():
-        return evaluate_state(state), None
+        return evaluate_state_minimax(state), None
 
-    possible_moves = state.get_possible_moves()
+    possible_moves,_ = state.get_possible_moves()
     best_move = None
 
     if maximizing_player:
@@ -293,6 +417,276 @@ def minimax(state, depth, alpha, beta, maximizing_player):
             if beta <= alpha:
                 break
         return min_eval, best_move
+    
+def action_to_move(action, grid_size):
+    num_horiz = (grid_size + 1) * grid_size  # Số đường ngang trong bảng
+
+    if action < num_horiz:
+        # Nếu action thuộc phần đường ngang
+        i = action // grid_size
+        j = action % grid_size
+        return ("h", i, j)
+    else:
+        # Nếu action thuộc phần đường dọc
+        action -= num_horiz  # Điều chỉnh index để bắt đầu từ 0
+        i = action // (grid_size + 1)
+        j = action % (grid_size + 1)
+        return ("v", i, j)
+    
+def move_to_action(move, grid_size):
+    move_type, i, j = move
+    if move_type == "h":
+        return i * grid_size + j  # Chỉ số trong phần `horiz`
+    elif move_type == "v":
+        return (grid_size + 1) * grid_size + i * (grid_size + 1) + j  # Chỉ số trong phần `vert`
+
+def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
+    champ_optimizer = optim.Adam(champion_model.parameters(), lr=8e-5, weight_decay=1e-5)
+    chall_optimizer = optim.Adam(challenger_model.parameters(), lr=1e-4, weight_decay=1e-5)
+    champ_memory = PrioritizedReplayBuffer(50000)
+    chall_memory = PrioritizedReplayBuffer(50000)
+    
+    epsilon = 1.0
+    epsilon_min = 0.15
+    gamma = 0.95
+    beta = 0.4
+    champ_target = copy.deepcopy(champion_model)
+    chall_target = copy.deepcopy(challenger_model)
+
+    target_update_frequency = 50
+    champion_update_frequency = 100
+    num_eval_games = 200
+    champion_win_threshold = 0.60
+    f_loss = 0.0
+    win_count_champ = 0
+    win_count_chall = 0
+    sum_loss = 0.0
+
+    for episode in range(num_episodes):
+        state = env.reset()
+        done = False
+        total_reward_champ = 0
+        total_reward_chall = 0
+
+        while not done:
+            _, full_moves = env.get_possible_moves()
+            valid_action_indices = [i for i, move in enumerate(full_moves) if move is not None]
+
+            if env.turn == 'bot':
+                model, target_model, optimizer = champion_model, champ_target, champ_optimizer
+                shared_memory = champ_memory
+            else:
+                model, target_model, optimizer = challenger_model, chall_target, chall_optimizer
+                shared_memory = chall_memory
+            
+
+            rnd = random.random()
+            if rnd < epsilon:
+                # 1. Random action
+                action = random.choice(valid_action_indices)
+
+            else:
+                # 3. Softmax sampling from DQN
+                with torch.no_grad():
+                    state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+                    q_values = model(state_tensor).squeeze(0)
+                    mask = torch.tensor([m is not None for m in full_moves], dtype=torch.bool)
+                    q_values[~mask] = -float('inf')
+                    T = max(0.15, epsilon)
+                    probs = torch.nn.functional.softmax(q_values / T, dim=0)
+                    action = torch.multinomial(probs, 1).item()
+
+            turn_indicator = 0 if env.turn == 'bot' else 1
+            next_state, reward, done = env.step(action, turn_indicator)
+           
+            shared_memory.push(state, action, reward, next_state, done)
+            state = next_state
+
+            if env.turn == 'bot':
+                total_reward_champ += reward
+            else:
+                total_reward_chall += reward
+
+            if len(shared_memory.buffer) > 128:
+                batch = shared_memory.sample(64, beta)
+                states, actions, rewards, next_states, dones, weights, indices = batch
+
+                q_pred = model(states).gather(1, actions.unsqueeze(1)).squeeze()
+                # Q = r + gamma * Q(s', a')
+                # Target từ target model
+                with torch.no_grad():
+                    next_q_values = target_model(next_states)
+                    next_actions = torch.argmax(model(next_states), dim=1)
+                    next_q = next_q_values.gather(1, next_actions.unsqueeze(1)).squeeze()
+                    q_target = rewards + gamma * next_q * (1 - dones)
+
+                td_errors = q_pred - q_target
+                per_sample_loss = F.smooth_l1_loss(q_pred, q_target, reduction='none')
+                loss = (per_sample_loss * weights).mean()
+                sum_loss += loss.item()
+                f_loss = loss.item()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                shared_memory.update_priorities(indices, td_errors.abs().detach().numpy())
+        
+        champ_score = np.sum(env.boxes == 'bot')
+        chall_score = np.sum(env.boxes == 'player')
+        if champ_score > chall_score:
+            win_count_champ += 1
+        elif chall_score > champ_score:
+            win_count_chall += 1
+
+        if episode < 5000:
+            epsilon = max(epsilon_min, epsilon * 0.9997)
+        else:
+            epsilon = max(epsilon_min, epsilon * 0.9999)
+        beta = min(1.0, beta + 0.0001)
+        
+        if episode % target_update_frequency == 0:
+            print(f"Episode {episode}: Epsilon = {epsilon:.4f}, Loss = {sum_loss:.4f},Final Loss = {f_loss: .4f} Memory = {len(shared_memory.buffer)}")
+            soft_update(champ_target, champion_model, tau=1)
+            soft_update(chall_target, challenger_model, tau=1)
+        if (episode + 1) % champion_update_frequency == 0:
+            win_rate = win_count_chall / (win_count_champ + win_count_chall)
+            
+            print(f"After {episode+1} episodes: Challenger win rate = {win_rate:.2f}: Champ = {win_count_champ}; Chall = {win_count_chall}")
+            if win_rate > champion_win_threshold:
+                print("Updating champion with challenger weights...")
+                soft_update(champion_model, challenger_model, tau=0.1)
+                soft_update(champ_target, champion_model, tau=0.1)
+
+                win_count_champ = win_count_chall = 0
+            else:
+                win_count_champ = win_count_chall = 0
+        sum_loss = 0.0
+    
+    create_chart(champion_model, "Minimax")
+    create_chart(challenger_model, "Random")
+    return champion_model
+
+
+def soft_update(target, source, tau=0.1):
+    # Retained for backward compatibility but not used in the new update scheme.
+    for target_param, source_param in zip(target.parameters(), source.parameters()):
+        target_param.data.copy_(tau * source_param.data + (1 - tau) * target_param.data)
+
+
+
+
+
+def get_best_dqn_move(env, model):
+    state = torch.tensor(env.get_state()).float()
+    possible_moves, full_moves = env.get_possible_moves()  # full_moves có 24 phần tử
+    mask = torch.tensor([m is not None for m in full_moves], dtype=torch.bool)
+    
+    with torch.no_grad():
+        q_values = model(state)  # Q-values của tất cả 24 hành động
+        q_values[~mask] = -float('inf')
+        action = torch.argmax(q_values).item()
+    if not mask[action]:
+        print("random")
+        return random.choice(possible_moves)
+    return full_moves[action]
+import matplotlib.pyplot as plt
+
+def simulate_game_random(model, rows=3, cols=3):
+    """
+    Simulate a game where both the bot and its opponent select moves randomly.
+    The bot is marked as "bot" and the opponent as "player".
+    """
+    state_obj = GameState(rows, cols)
+    state_obj.reset()
+    while not state_obj.is_game_over():
+        if state_obj.turn == "bot":
+            # Bot uses minimax. If minimax returns no move, fallback to random choice.
+            move = get_best_dqn_move(state_obj, model)
+        else:
+            possible_moves, _ = state_obj.get_possible_moves()
+            move = random.choice(possible_moves)
+            
+        extra = state_obj.apply_move(move, state_obj.turn)
+        if not extra:
+            state_obj.turn = "player" if state_obj.turn == "bot" else "bot"
+    
+    bot_score = np.sum(state_obj.boxes == "bot")
+    player_score = np.sum(state_obj.boxes == "player")
+    
+    if bot_score > player_score:
+        return 1  # Bot wins
+    elif bot_score < player_score:
+        return 0  # Opponent wins
+    else:
+        return 0.5  # Tie
+
+def simulate_game_minimax(model, rows=3, cols=3):
+    """
+    Simulate a game where the bot selects moves using the minimax algorithm with alpha-beta pruning.
+    The bot is marked as "bot" and its opponent selects moves randomly.
+    """
+    state_obj = GameState(rows, cols)
+    state_obj.reset()
+    
+    while not state_obj.is_game_over():
+        if state_obj.turn == "bot":
+            # Bot uses minimax. If minimax returns no move, fallback to random choice.
+            move = get_best_dqn_move(state_obj, model)
+        else:
+            _, move = minimax(state_obj, 1, -math.inf, math.inf, True)
+            if move is None:
+                possible_moves, _ = state_obj.get_possible_moves()
+                move = random.choice(possible_moves)
+            
+        extra = state_obj.apply_move(move, state_obj.turn)
+        if not extra:
+            state_obj.turn = "player" if state_obj.turn == "bot" else "bot"
+    
+    bot_score = np.sum(state_obj.boxes == "bot")
+    player_score = np.sum(state_obj.boxes == "player")
+    
+    if bot_score > player_score:
+        return 1  # Bot wins
+    elif bot_score < player_score:
+        return 0  # Opponent wins
+    else:
+        return 0.5  # Tie
+
+def create_chart(model, bot_type):
+    """
+    Create a chart showing the win rate over 100 simulated games.
+    The bot_type parameter determines which simulation to run:
+        - "DQN": uses the provided DQN model via get_best_dqn_move.
+        - "Minimax": uses the minimax algorithm.
+        - "Random": all moves are chosen randomly.
+    """
+    win_rate = 0.0
+    win_rates = []
+    num_games = 1000
+
+    for game in range(1, num_games + 1):
+        
+        if bot_type == "Minimax":
+            result = simulate_game_minimax(model, rows=3, cols=3)
+        elif bot_type == "Random":
+            result = simulate_game_random(model, rows=3, cols=3)
+        else:
+            raise ValueError("Unknown bot type")
+        
+        win_rate += result
+        current_rate = win_rate / game
+        win_rates.append(current_rate)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, num_games + 1), win_rates)
+    plt.xlabel("Number of Games")
+    plt.ylabel("Bot Win Rate")
+    plt.title(f"{bot_type} Bot Win Rate Over {num_games} Games")
+    plt.grid(True)
+    plt.show()
+
+# Create a DQN model instance (for a 3x3 board, state and action sizes are both 24)
+
 
     
 # --- Giao diện trò chơi ---
@@ -300,20 +694,19 @@ def minimax(state, depth, alpha, beta, maximizing_player):
 class GameFrame(tk.Frame):
     def __init__(self, parent, app, rows, cols, difficulty, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
+        
         self.app = app
         self.rows = rows
         self.cols = cols
         self.difficulty = difficulty
-        self.depth = {"Easy": 3, "Medium": 4, "Hard": 5}.get(difficulty, 3)
+        
         self.state = GameState(rows, cols)
-
         self.canvas_width = cols * CELL_SIZE + 4 * PADDING
         self.canvas_height = rows * CELL_SIZE + 4 * PADDING
-
         self.canvas = tk.Canvas(self, width=self.canvas_width, height=self.canvas_height, bg="white")
         self.canvas.pack(expand=True)
         self.canvas.bind("<Button-1>", self.on_click)
-
+        self.model = None
         self.status_label = tk.Label(self, text="Lượt của bạn")
         self.status_label.pack()
 
@@ -333,6 +726,7 @@ class GameFrame(tk.Frame):
         self.app.show_start_menu()
 
     def restart_game(self):
+        self.state.reset()
         self.app.show_game(self.rows, self.cols, self.difficulty)
 
     def draw_board(self):
@@ -391,7 +785,7 @@ class GameFrame(tk.Frame):
         color = "lightblue" if owner == 'player' else "pink"
         self.canvas.create_rectangle(mid_x - expand_x, mid_y - expand_y, mid_x + expand_x, mid_y + expand_y, fill=color,
                                      outline="")
-        self.after(20, self.animate_box, i, j, owner, progress + 0.1)
+        self.after(20, self.animate_box, i, j, owner, progress + 0.2)
 
     def draw_final_box(self, i, j, owner):
         x1 = PADDING + j * CELL_SIZE + 2
@@ -453,6 +847,7 @@ class GameFrame(tk.Frame):
             extra = self.state.apply_move(clicked_move, 'player')
             self.state.apply_move(clicked_move, 'player')
             color = "blue" if self.state.turn == 'player' else "red"
+            
             if clicked_move[0] == "h":
                 x1, y1, x2, y2 = PADDING + clicked_move[2] * CELL_SIZE, PADDING + clicked_move[
                     1] * CELL_SIZE, PADDING + (clicked_move[2] + 1) * CELL_SIZE, PADDING + clicked_move[1] * CELL_SIZE
@@ -475,13 +870,17 @@ class GameFrame(tk.Frame):
             print("Click không hợp lệ.")
 
     def bot_move(self):
-        # Bot tính toán nước đi bằng minimax
-        # với độ sâu đã chọn
-        _, best_move = minimax(self.state,
-        self.depth, -math.inf, math.inf, True)
-
+        # Bot tính toán nước đi bằng minimax với độ sâu đã chọn
+        if self.difficulty == "Minimax":
+            _, best_move = minimax(self.state, 2, -math.inf, math.inf, True)
+        elif self.difficulty == "Genetic Algorithm":
+            pass
+        else:
+            best_move = get_best_dqn_move(self.state, self.model)
+        # best_move = get_best_dqn_move(self.state, self.model)
         if best_move is None:
             return
+        
         extra = self.state.apply_move(best_move, 'bot')
         color = "blue" if self.state.turn == 'player' else "red"
         if best_move[0] == "h":
@@ -534,24 +933,31 @@ class StartMenuFrame(tk.Frame):
         # Khung chọn kích thước bàn cờ
         size_frame = ttk.LabelFrame(container, text="Board Size", padding=10)
         size_frame.pack(pady=15, fill="x", padx=20)
-        ttk.Label(size_frame, text="Rows:").grid(row=0, column=0, padx=5, pady=5)
-        ttk.Label(size_frame, text="Columns:").grid(row=1, column=0, padx=5, pady=5)
+
+        ttk.Label(size_frame, text="Size:").grid(row=0, column=0, padx=5, pady=5)
         self.rows_var = tk.IntVar(value=3)
-        self.cols_var = tk.IntVar(value=3)
-        self.rows_spin = ttk.Spinbox(size_frame, from_=3, to=9, textvariable=self.rows_var, width=5)
+        self.cols_var = tk.IntVar(value=3)  # Tạo biến riêng cho cols
+
+        self.rows_spin = ttk.Spinbox(size_frame, from_=3, to=5, textvariable=self.rows_var, width=5, command=self.update_bot_options)
         self.rows_spin.grid(row=0, column=1, padx=5, pady=5)
-        self.cols_spin = ttk.Spinbox(size_frame, from_=3, to=9, textvariable=self.cols_var, width=5)
-        self.cols_spin.grid(row=1, column=1, padx=5, pady=5)
+
+        self.cols_var = self.rows_var  # Gán giá trị cho cols bằng giá trị của rows
+
+        # Ràng buộc sự kiện khi giá trị thay đổi
+        self.rows_var.trace_add("write", lambda *args: self.update_bot_options())
+        self.cols_var.trace_add("write", lambda *args: self.update_bot_options())
 
         # Khung chọn độ khó
-        diff_frame = ttk.LabelFrame(container, text="Difficulty Level", padding=10)
+        diff_frame = ttk.LabelFrame(container, text="Bot Type", padding=10)
         diff_frame.pack(pady=15, fill="x", padx=20)
-        self.difficulty_var = tk.StringVar(value="Easy")
-        self.diff_option = ttk.Combobox(diff_frame, textvariable=self.difficulty_var, values=["Easy", "Medium", "Hard"],
-                                        state="readonly")
+        
+        self.difficulty_var = tk.StringVar(value="Minimax")
+        self.diff_option = ttk.Combobox(diff_frame, textvariable=self.difficulty_var, state="readonly")
         self.diff_option.pack(pady=5, padx=10)
-        self.diff_option.current(1)
+        
+        self.update_bot_options()  # Gọi cập nhật giá trị ban đầu
 
+        
         # Thêm phần trang trí
         self.info_label = tk.Label(container, text="Select board size and difficulty to start playing.",
                                    font=("Helvetica", 12), bg="#f0f0f0")
@@ -563,12 +969,21 @@ class StartMenuFrame(tk.Frame):
                                       command=self.show_about)
         self.about_button.pack(pady=5)
 
+
         # Nút bắt đầu
         self.start_button = tk.Button(container, text="Start Game", command=self.start_game,
                                       font=("Helvetica", 12, "bold"), bg="#4CAF50", fg="white", relief="ridge", bd=3,
                                       padx=10, pady=5, borderwidth=5, highlightthickness=2)
         self.start_button.pack(pady=20)
-
+    def update_bot_options(self):
+            """ Cập nhật danh sách thuật toán bot khi thay đổi kích thước """
+            if self.rows_var.get() == 3:
+                values = ["Minimax", "Genetic Algorithm", "Reinforcement Learning"]
+            else:
+                values = ["Minimax"]
+            
+            self.diff_option["values"] = values
+            self.diff_option.current(0)  # Đặt lại giá trị mặc định là mục đầu tiên
     def start_game(self):
         global CELL_SIZE
         rows = self.rows_var.get()
@@ -592,12 +1007,11 @@ class App(tk.Tk):
         super().__init__()
         self.title("Dots and Boxes")
         self.resizable(False, False)
-
         # Lấy kích thước màn hình
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         size = screen_width // 2  # Kích thước cửa sổ bằng 1/2 chiều rộng màn hình
-
+        self.model = None
         # Căn giữa cửa sổ
         x_position = (screen_width - size) // 2
         y_position = (screen_height - size - 50) // 2
@@ -619,6 +1033,15 @@ class App(tk.Tk):
     def show_game(self, rows, cols, difficulty):
         self.clear_container()
         game_frame = GameFrame(self.container, self, rows, cols, difficulty)
+        
+        if difficulty == "Reinforcement Learning":
+            if self.model is None:
+                model1 = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                model2 = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                self.model = train_dqn(game_frame.state, model1,model2)
+            
+        game_frame.model = self.model
+        
         game_frame.pack(fill="both", expand=True)
 
 
