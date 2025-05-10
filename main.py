@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import random
 import numpy as np
 
+from Minimax import minimax
 from DQN import DQN, PrioritizedReplayBuffer
 import numpy as np
 # --- Các hằng số toàn cục ---
@@ -214,7 +215,30 @@ class GameState:
         if completed_box:
             extra_move = True
         return extra_move
-    
+
+def greedy_move(state):
+    """
+    Tìm nước đi tốt nhất theo thuật toán tham lam.
+    Với mỗi nước đi khả thi, mô phỏng nước đi của bot:
+      - Nếu hoàn thành ô => +1000
+      - Ngược lại đánh giá state bằng evaluate_state (bot là turn=0)
+    Trả về nước đi tốt nhất tìm được.
+    """
+    best_score = -float('inf')
+    best_move = None
+    possible_moves, _ = state.get_possible_moves()
+    for m in possible_moves:
+        s2 = state.clone()
+        extra = s2.apply_move(m, "bot")
+        if extra:
+            score = 1000.0
+        else:
+            score = evaluate_state(s2, turn=1)
+        if score > best_score:
+            best_score = score
+            best_move = m
+    return best_move
+   
 def evaluate_state(self, turn):
     """
     Đánh giá trạng thái hiện tại của trò chơi theo quan điểm của bot.
@@ -243,181 +267,6 @@ def evaluate_state(self, turn):
     score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
     return score
 
-# --- Hàm đánh giá trạng thái (heuristic) ---
-def evaluate_state_minimax(state):
-    score = state.bot_score - state.player_score
-    
-    # Đánh giá chuỗi các ô (Chains)
-    chain_bonus = evaluate_chain(state)
-    score += chain_bonus
-
-    # Cân nhắc thêm “tiềm năng” chiếm ô
-    potential_bonus = evaluate_potential(state)
-    score += potential_bonus
-
-    # Đánh giá an toàn của các nước đi
-    safety_score = evaluate_safety(state)
-    score += safety_score
-
-    return score
-
-    
-def evaluate_chain(state):
-    """
-    Đánh giá chuỗi các ô (Chains) có thể bị chiếm trong các lượt tiếp theo.
-    """
-    chain_bonus = 0
-    for i in range(state.rows):
-        for j in range(state.cols):
-            if state.boxes[i][j] is None:
-                # Kiểm tra xem ô (i, j) có thể là một phần của chuỗi
-                if is_part_of_chain(state, i, j):
-                    chain_bonus += 1 if state.turn == 'bot' else -1
-    return chain_bonus
-
-def evaluate_safety(state):
-    """
-    Đánh giá an toàn của các nước đi.
-    Nếu bot có thể tạo ra một nước đi an toàn mà không cho phép đối thủ chiếm ô dễ dàng.
-    """
-    safety_score = 0
-    for i in range(state.rows):
-        for j in range(state.cols):
-            if state.boxes[i][j] is None:
-                # Kiểm tra xem nếu bot chiếm ô này, có tạo ra cơ hội cho đối thủ không.
-                if is_safe_move(state, i, j):
-                    safety_score += 1  # Nước đi an toàn được đánh giá cao hơn
-                else:
-                    safety_score -= 1  # Nếu là nước đi nguy hiểm, trừ điểm
-
-    return safety_score
-
-def is_part_of_chain(state, i, j):
-    """
-    Kiểm tra xem ô (i, j) có thể nằm trong một chuỗi các ô có thể bị chiếm liên tiếp không.
-    """
-    # Danh sách các ô lân cận (ở đây là 4 ô xung quanh ô (i, j)).
-    neighbors = [
-        (i-1, j), (i+1, j),  # Trên và dưới
-        (i, j-1), (i, j+1)   # Trái và phải
-    ]
-    
-    # Kiểm tra các ô lân cận đã có ít nhất 3 cạnh được vẽ, có thể tạo thành chuỗi
-    for ni, nj in neighbors:
-        if 0 <= ni < state.rows and 0 <= nj < state.cols:
-            if state.boxes[ni][nj] is None:  # Nếu ô chưa bị chiếm
-                drawn = 0
-                if state.horiz[ni][nj]:
-                    drawn += 1
-                if state.horiz[ni + 1][nj]:
-                    drawn += 1
-                if state.vert[ni][nj]:
-                    drawn += 1
-                if state.vert[ni][nj + 1]:
-                    drawn += 1
-                if drawn == 3:  # Nếu ô này có thể bị chiếm trong lượt tới
-                    return True
-    return False
-
-def is_safe_move(state, i, j):
-    """
-    Kiểm tra nếu một nước đi vào ô (i, j) có thể tạo ra cơ hội cho đối thủ.
-    """
-    # Danh sách các ô lân cận (4 ô xung quanh ô (i, j))
-    neighbors = [
-        (i-1, j), (i+1, j),  # Trên và dưới
-        (i, j-1), (i, j+1)   # Trái và phải
-    ]
-    
-    # Kiểm tra các ô lân cận xem có thể tạo cơ hội cho đối thủ không
-    for ni, nj in neighbors:
-        if 0 <= ni < state.rows and 0 <= nj < state.cols:
-            if state.boxes[ni][nj] is None:  # Nếu ô này chưa bị chiếm
-                drawn = 0
-                if state.horiz[ni][nj]:
-                    drawn += 1
-                if state.horiz[ni + 1][nj]:
-                    drawn += 1
-                if state.vert[ni][nj]:
-                    drawn += 1
-                if state.vert[ni][nj + 1]:
-                    drawn += 1
-                # Nếu ô này có thể bị chiếm ngay sau đó bởi đối thủ, nó không an toàn
-                if drawn == 3:
-                    return False
-    return True  # Nếu không có cơ hội cho đối thủ, nước đi này an toàn
-
-def evaluate_potential(state):
-    """
-    Đánh giá tiềm năng chiếm ô: tính toán các ô chưa hoàn thành và khả năng chiếm ô của bot.
-    """
-    potential_bonus = 0
-    for i in range(state.rows):
-        for j in range(state.cols):
-            if state.boxes[i][j] is None:
-                drawn = 0
-                if state.horiz[i][j]:
-                    drawn += 1
-                if state.horiz[i + 1][j]:
-                    drawn += 1
-                if state.vert[i][j]:
-                    drawn += 1
-                if state.vert[i][j + 1]:
-                    drawn += 1
-
-                # Đánh giá ô có 3 cạnh (sắp xếp thứ tự cao hơn)
-                if drawn == 3:
-                    bonus = 2.0
-                    potential_bonus += bonus if state.turn == 'bot' else -bonus
-                elif drawn == 2:
-                    bonus = 0.5
-                    potential_bonus += bonus if state.turn == 'bot' else -bonus
-    return potential_bonus
-
-
-# --- Thuật toán minimax với alpha-beta pruning ---
-def minimax(state, depth, alpha, beta, maximizing_player):
-    if depth == 0 or state.is_game_over():
-        return evaluate_state_minimax(state), None
-
-    possible_moves,_ = state.get_possible_moves()
-    best_move = None
-
-    if maximizing_player:
-        max_eval = -math.inf
-        for move in possible_moves:
-            new_state = state.clone()
-            extra = new_state.apply_move(move, 'bot')
-            if extra:
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, True)
-            else:
-                new_state.turn = 'player'
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, False)
-            if eval_score > max_eval:
-                max_eval = eval_score
-                best_move = move
-            alpha = max(alpha, eval_score)
-            if beta <= alpha:
-                break
-        return max_eval, best_move
-    else:
-        min_eval = math.inf
-        for move in possible_moves:
-            new_state = state.clone()
-            extra = new_state.apply_move(move, 'player')
-            if extra:
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, False)
-            else:
-                new_state.turn = 'bot'
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, True)
-            if eval_score < min_eval:
-                min_eval = eval_score
-                best_move = move
-            beta = min(beta, eval_score)
-            if beta <= alpha:
-                break
-        return min_eval, best_move
-    
 def action_to_move(action, grid_size):
     num_horiz = (grid_size + 1) * grid_size  # Số đường ngang trong bảng
 
