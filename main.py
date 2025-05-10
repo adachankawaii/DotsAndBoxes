@@ -424,53 +424,68 @@ def get_best_dqn_move(env, model):
     possible_moves, full_moves = env.get_possible_moves()
     valid_indices = [i for i, m in enumerate(full_moves) if m is not None]
 
-    best_move = None
-    best_score = -float('inf')
-
     with torch.no_grad():
         state_tensor = torch.tensor(state_base, dtype=torch.float32)
         q_values = model(state_tensor)
         mask = torch.tensor([m is not None for m in full_moves], dtype=torch.bool)
         q_values[~mask] = -float('inf')
 
-    all_moves_dangerous = True
-
+    best_safe_move = None
+    best_safe_score = -float('inf')
+    best_dqn_move = None
+    dqn_move_safe = True
+    has_scoring_move = False
+    
     for idx in valid_indices:
         move = full_moves[idx]
         state_clone = env.clone()
-        extra = state_clone.apply_move(move, 'bot')
+        extra = state_clone.apply_move(move, 'bot')  # true nếu ăn điểm
 
-        # Kiểm tra xem nước đi này có để đối thủ ăn ngay không
-        safe = True
-        if not extra:
+        # Nếu có nước ăn điểm -> đi ngay
+        if extra:
+            best_safe_move = move
+        else:
+            # Kiểm tra nước đi này có để đối thủ ăn điểm không
             opp_possible_moves, _ = state_clone.get_possible_moves()
+            safe = True
             for opp_move in opp_possible_moves:
                 opp_clone = state_clone.clone()
                 if opp_clone.apply_move(opp_move, 'player'):
                     safe = False
                     break
-        if safe:
-            all_moves_dangerous = False
 
-        # Tích hợp cả Q-value và an toàn
-        score = q_values[idx].item()
-        if extra:
-            score += 1000
-        elif safe:
-            score += 10  # Ưu tiên nhẹ cho nước đi an toàn
+            # Lưu lại nước đi tốt nhất trong số các nước an toàn
+            if safe and q_values[idx].item() > best_safe_score:
+                best_safe_score = q_values[idx].item()
+                best_safe_move = move
+    
+        # Xác định nước đi DQN đề xuất
+    dqn_action = torch.argmax(q_values).item()
+    best_dqn_move = full_moves[dqn_action]
+    
+    if best_dqn_move is not None:
+        # Kiểm tra độ an toàn của nước đi DQN chọn
+        dqn_state = env.clone()
+        extra = dqn_state.apply_move(best_dqn_move, 'bot')
+        if not extra:
+            opp_moves, _ = dqn_state.get_possible_moves()
+            for opp_move in opp_moves:
+                opp_clone = dqn_state.clone()
+                if opp_clone.apply_move(opp_move, 'player'):
+                    dqn_move_safe = False
+                    break
 
-        if score > best_score:
-            best_score = score
-            best_move = move
+    # Ưu tiên nước an toàn nếu DQN chọn nước nguy hiểm
+    if not dqn_move_safe and best_safe_move is not None:
+        return best_safe_move
 
-    # Nếu tất cả đều nguy hiểm, để DQN tự quyết định
-    if all_moves_dangerous:
-        action = torch.argmax(q_values).item()
-        if not mask[action]:
-            return random.choice(possible_moves)
-        return full_moves[action]
+    # Nếu DQN an toàn hoặc không còn lựa chọn nào khác, dùng DQN
+    if mask[dqn_action]:
+        return best_dqn_move
 
-    return best_move
+    # Nếu nước DQN invalid (bị loại) -> fallback
+    return random.choice(possible_moves)
+
 
 
 import matplotlib.pyplot as plt
@@ -935,10 +950,11 @@ class App(tk.Tk):
                 self.model = model
 
             game_frame.model = self.model
-            create_chart(game_frame.model, "Minimax")
-            create_chart(game_frame.model, "Random")
-            create_chart(game_frame.model, "Random Player")
-            create_chart(game_frame.model, "Trained Player")
+            #Ai pull về xóa mấy cái chart đi nhé :3 
+            #create_chart(game_frame.model, "Minimax")
+            #create_chart(game_frame.model, "Random")
+            #create_chart(game_frame.model, "Random Player")
+            #create_chart(game_frame.model, "Trained Player")
         game_frame.state.reset()
         game_frame.pack(fill="both", expand=True)
 
