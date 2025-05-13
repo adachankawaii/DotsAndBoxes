@@ -339,7 +339,7 @@ def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
     chall_optimizer = optim.Adam(challenger_model.parameters(), lr=1e-4, weight_decay=1e-5)
     champ_memory = PrioritizedReplayBuffer(100000)
     chall_memory = PrioritizedReplayBuffer(100000)
-    create_chart(challenger_model, "Random")
+    
     epsilon = 1.0
     epsilon_min = 0.01
     gamma = 0.99
@@ -454,7 +454,7 @@ def train_dqn(env, champion_model, challenger_model, num_episodes=10000):
                 win_count_champ = win_count_chall = 0
         sum_loss = []
     
-   
+    torch.save(champion_model.state_dict(), "dqn_model.pt")
     return champion_model
 
 
@@ -475,60 +475,66 @@ def get_best_dqn_move(env, model):
         mask = torch.tensor([m is not None for m in full_moves], dtype=torch.bool)
         q_values[~mask] = -float('inf')
 
+    # Lấy nước đi DQN chọn
+    dqn_action = torch.argmax(q_values).item()
+    dqn_move = full_moves[dqn_action]
+
+    # Kiểm tra nước DQN chọn có nguy hiểm không
+    dqn_state = env.clone()
+    extra = dqn_state.apply_move(dqn_move, 'bot')
+
+    dqn_move_is_safe = True
+    if not extra:
+        opp_moves, _ = dqn_state.get_possible_moves()
+        for opp_move in opp_moves:
+            opp_clone = dqn_state.clone()
+            if opp_clone.apply_move(opp_move, 'player'):
+                dqn_move_is_safe = False
+                break
+
+    # Nếu DQN chọn nước đi an toàn → dùng luôn
+    if dqn_move_is_safe and mask[dqn_action]:
+        return dqn_move
+
+    # Nếu DQN chọn nước nguy hiểm → tìm nước đi an toàn bằng tham lam
     best_safe_move = None
-    best_safe_score = -float('inf')
-    best_dqn_move = None
-    dqn_move_safe = True
-    has_scoring_move = False
-    
+    best_score = -float('inf')
+    has_safe_move = False
+
     for idx in valid_indices:
         move = full_moves[idx]
         state_clone = env.clone()
-        extra = state_clone.apply_move(move, 'bot')  # true nếu ăn điểm
+        extra = state_clone.apply_move(move, 'bot')
 
-        # Nếu có nước ăn điểm -> đi ngay
+        # Nếu có thể ăn điểm thì ưu tiên
         if extra:
-            best_safe_move = move
-        else:
-            # Kiểm tra nước đi này có để đối thủ ăn điểm không
-            opp_possible_moves, _ = state_clone.get_possible_moves()
-            safe = True
-            for opp_move in opp_possible_moves:
-                opp_clone = state_clone.clone()
-                if opp_clone.apply_move(opp_move, 'player'):
-                    safe = False
-                    break
+            return move
 
-            # Lưu lại nước đi tốt nhất trong số các nước an toàn
-            if safe and q_values[idx].item() > best_safe_score:
-                best_safe_score = q_values[idx].item()
+        # Kiểm tra có để đối thủ ăn điểm không
+        opp_possible_moves, _ = state_clone.get_possible_moves()
+        safe = True
+        for opp_move in opp_possible_moves:
+            opp_clone = state_clone.clone()
+            if opp_clone.apply_move(opp_move, 'player'):
+                safe = False
+                break
+
+        if safe:
+            has_safe_move = True
+            score = state_clone.evaluate_state(0)
+            if score > best_score:
+                best_score = score
                 best_safe_move = move
-    
-        # Xác định nước đi DQN đề xuất
-    dqn_action = torch.argmax(q_values).item()
-    best_dqn_move = full_moves[dqn_action]
-    
-    if best_dqn_move is not None:
-        # Kiểm tra độ an toàn của nước đi DQN chọn
-        dqn_state = env.clone()
-        extra = dqn_state.apply_move(best_dqn_move, 'bot')
-        if not extra:
-            opp_moves, _ = dqn_state.get_possible_moves()
-            for opp_move in opp_moves:
-                opp_clone = dqn_state.clone()
-                if opp_clone.apply_move(opp_move, 'player'):
-                    dqn_move_safe = False
-                    break
 
-    # Ưu tiên nước an toàn nếu DQN chọn nước nguy hiểm
-    if not dqn_move_safe and best_safe_move is not None:
+    # Nếu có nước đi an toàn → chọn theo tham lam
+    if has_safe_move:
         return best_safe_move
 
-    # Nếu DQN an toàn hoặc không còn lựa chọn nào khác, dùng DQN
+    # Nếu tất cả nước đi đều nguy hiểm → dùng DQN quyết định
     if mask[dqn_action]:
-        return best_dqn_move
+        return dqn_move
 
-    # Nếu nước DQN invalid (bị loại) -> fallback
+    # Nếu nước đi DQN không hợp lệ (hiếm khi xảy ra) → chọn ngẫu nhiên
     return random.choice(possible_moves)
 
 
@@ -555,7 +561,7 @@ def simulate_game(model, rows=3, cols=3, opponent_type="random"):
                 if move is None:
                     possible_moves, _ = state_obj.get_possible_moves()
                     move = random.choice(possible_moves)
-            elif opponent_type == "Random Player":
+            elif opponent_type == "Simple-greedy Player":
                 #Code tham lam trong do choi random neu khong co nuoc an ngay, neu co nuoc an ngay thi danh nuoc do
                 possible_moves, _ = state_obj.get_possible_moves()
                 move = random.choice(possible_moves)
@@ -565,27 +571,24 @@ def simulate_game(model, rows=3, cols=3, opponent_type="random"):
                     if extra:
                         move = m
                         break
-            elif opponent_type == "Trained Player":
+            elif opponent_type == "Greedy Player":
                 move = None
                 # Code tham lam giong nhu random_player, nhung nuoc di duoc chon khong dua bot vao trang thai nguy hiem
-                if random.random() < 0.95:
-                    best_move = None
-                    best_score = -float('inf')
-                    possible_moves, _ = state_obj.get_possible_moves()
-                    for m in possible_moves:
-                        state_clone = state_obj.clone()
-                        extra = state_clone.apply_move(m, "player")
-                        if extra:
-                            score = 1000
-                        else:
-                            score = evaluate_state(state_clone)
-                        if score > best_score:
-                            best_score = score
-                            best_move = m
-                    move = best_move
-                else:
-                    possible_moves, _ = state_obj.get_possible_moves()
-                    move = random.choice(possible_moves)
+                best_move = None
+                best_score = -float('inf')
+                possible_moves, _ = state_obj.get_possible_moves()
+                for m in possible_moves:
+                    state_clone = state_obj.clone()
+                    extra = state_clone.apply_move(m, "player")
+                    if extra:
+                        score = 1000
+                    else:
+                        score = evaluate_state(state_clone)
+                    if score > best_score:
+                        best_score = score
+                        best_move = m
+                move = best_move
+                
         extra = state_obj.apply_move(move, state_obj.turn)
         if not extra:
             state_obj.turn = "player" if state_obj.turn == "bot" else "bot"
@@ -624,7 +627,7 @@ def create_chart(model, bot_type):
     plt.plot(range(1, num_games + 1), win_rates)
     plt.xlabel("Number of Games")
     plt.ylabel("Bot Win Rate")
-    plt.title(f"{bot_type} Bot Win Rate Over {num_games} Games")
+    plt.title(f"DQN Bot vs {bot_type} Win Rate Over {num_games} Games")
     plt.grid(True)
     plt.ylim(-0.2, 1.2)
     plt.show()
@@ -980,26 +983,23 @@ class App(tk.Tk):
         
         if difficulty == "Reinforcement Learning":
             MODEL_PATH = "dqn_model.pt"
-            if self.model is None:
-                if os.path.exists(MODEL_PATH):
-
-                    model = DQN(game_frame.state.state_size, game_frame.state.action_size)
-                    model.load_state_dict(torch.load(MODEL_PATH))
-                    model.eval()
-                else:
-                    model1 = DQN(game_frame.state.state_size, game_frame.state.action_size)
-                    model2 = DQN(game_frame.state.state_size, game_frame.state.action_size)
-                    model = train_dqn(game_frame.state, model1, model2)
-                    torch.save(model.state_dict(), MODEL_PATH)
-                
-                self.model = model
+            
+            if os.path.exists(MODEL_PATH):
+                self.model = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                self.model.load_state_dict(torch.load(MODEL_PATH))
+                self.model.eval()
+            else:
+                model1 = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                model2 = DQN(game_frame.state.state_size, game_frame.state.action_size)
+                self.model = train_dqn(game_frame.state, model1, model2)
 
             game_frame.model = self.model
             #Ai pull về xóa mấy cái chart đi nhé :3 
-            #create_chart(game_frame.model, "Minimax")
-            #create_chart(game_frame.model, "Random")
-            #create_chart(game_frame.model, "Random Player")
-            #create_chart(game_frame.model, "Trained Player")
+            
+            # create_chart(game_frame.model, "Minimax")
+            # create_chart(game_frame.model, "Random")
+            # create_chart(game_frame.model, "Simple-greedy Player")
+            # create_chart(game_frame.model, "Greedy Player")
         game_frame.state.reset()
         game_frame.pack(fill="both", expand=True)
 
