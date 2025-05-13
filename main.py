@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import random
 import numpy as np
 
+from Minimax import minimax
 from DQN import DQN, PrioritizedReplayBuffer
 import numpy as np
 # --- Các hằng số toàn cục ---
@@ -214,104 +215,58 @@ class GameState:
         if completed_box:
             extra_move = True
         return extra_move
-    def evaluate_state(self, turn):
-        """
-        Đánh giá trạng thái hiện tại của trò chơi theo quan điểm của bot.
-        Trả về một số thực, số dương nếu bot có lợi, số âm nếu bot gặp bất lợi.
-        """
-        score = self.player_score - self.bot_score  # Hiệu số điểm hiện tại
-        
-        if turn == 0:
-            bot = 'bot'
-            score = -score  # Đảo ngược điểm số nếu không phải lượt của bot
-        else:
-            bot = 'player'
-             
-        immediate_boxes = 0.0  # Số ô có thể hoàn thành ngay lập tức
-        dangerous_boxes = 0.0  # Số ô nguy hiểm có thể bị chiếm bởi đối thủ
-        
-        for r in range(self.rows):
-            for c in range(self.cols):
-                edges = sum([self.horiz[r][c], self.horiz[r+1][c], self.vert[r][c], self.vert[r][c+1]])
-                
-                if edges == 3:  # Ô có 3 cạnh đã được đánh dấu -> Có thể hoàn thành ngay
-                    if self.turn == bot:
-                        immediate_boxes = 1.0
-                    else:
-                        dangerous_boxes = 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
-        score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
-        return score
 
-# --- Hàm đánh giá trạng thái (heuristic) ---
-def evaluate_state(state):
-    # Hiệu số điểm hiện tại
-    score = state.bot_score - state.player_score
-    # Cân nhắc thêm “tiềm năng” chiếm ô: duyệt qua các ô chưa hoàn thành
-    for i in range(state.rows):
-        for j in range(state.cols):
-            if state.boxes[i][j] is None:
-                drawn = 0
-                if state.horiz[i][j]:
-                    drawn += 1
-                if state.horiz[i + 1][j]:
-                    drawn += 1
-                if state.vert[i][j]:
-                    drawn += 1
-                if state.vert[i][j + 1]:
-                    drawn += 1
-                if drawn == 3:
-                    bonus = 2.0
-                    score += bonus if state.turn == 'bot' else -bonus
-                elif drawn == 2:
-                    bonus = 0.5
-                    score += bonus if state.turn == 'bot' else -bonus
+def greedy_move(state):
+    """
+    Tìm nước đi tốt nhất theo thuật toán tham lam.
+    Với mỗi nước đi khả thi, mô phỏng nước đi của bot:
+      - Nếu hoàn thành ô => +1000
+      - Ngược lại đánh giá state bằng evaluate_state (bot là turn=0)
+    Trả về nước đi tốt nhất tìm được.
+    """
+    best_score = -float('inf')
+    best_move = None
+    possible_moves, _ = state.get_possible_moves()
+    for m in possible_moves:
+        s2 = state.clone()
+        extra = s2.apply_move(m, "bot")
+        if extra:
+            score = 1000.0
+        else:
+            score = evaluate_state(s2, turn=1)
+        if score > best_score:
+            best_score = score
+            best_move = m
+    return best_move
+   
+def evaluate_state(self, turn):
+    """
+    Đánh giá trạng thái hiện tại của trò chơi theo quan điểm của bot.
+    Trả về một số thực, số dương nếu bot có lợi, số âm nếu bot gặp bất lợi.
+    """
+    score = self.player_score - self.bot_score  # Hiệu số điểm hiện tại
+    
+    if turn == 0:
+        bot = 'bot'
+        score = -score  # Đảo ngược điểm số nếu không phải lượt của bot
+    else:
+        bot = 'player'
+            
+    immediate_boxes = 0.0  # Số ô có thể hoàn thành ngay lập tức
+    dangerous_boxes = 0.0  # Số ô nguy hiểm có thể bị chiếm bởi đối thủ
+    
+    for r in range(self.rows):
+        for c in range(self.cols):
+            edges = sum([self.horiz[r][c], self.horiz[r+1][c], self.vert[r][c], self.vert[r][c+1]])
+            
+            if edges == 3:  # Ô có 3 cạnh đã được đánh dấu -> Có thể hoàn thành ngay
+                if self.turn == bot:
+                    immediate_boxes = 1.0
+                else:
+                    dangerous_boxes = 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
+    score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
     return score
 
-
-
-# --- Thuật toán minimax với alpha-beta pruning ---
-def minimax(state, depth, alpha, beta, maximizing_player):
-    if depth == 0 or state.is_game_over():
-        return evaluate_state(state), None
-
-    possible_moves,_ = state.get_possible_moves()
-    best_move = None
-
-    if maximizing_player:
-        max_eval = -math.inf
-        for move in possible_moves:
-            new_state = state.clone()
-            extra = new_state.apply_move(move, 'bot')
-            if extra:
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, True)
-            else:
-                new_state.turn = 'player'
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, False)
-            if eval_score > max_eval:
-                max_eval = eval_score
-                best_move = move
-            alpha = max(alpha, eval_score)
-            if beta <= alpha:
-                break
-        return max_eval, best_move
-    else:
-        min_eval = math.inf
-        for move in possible_moves:
-            new_state = state.clone()
-            extra = new_state.apply_move(move, 'player')
-            if extra:
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, False)
-            else:
-                new_state.turn = 'bot'
-                eval_score, _ = minimax(new_state, depth - 1, alpha, beta, True)
-            if eval_score < min_eval:
-                min_eval = eval_score
-                best_move = move
-            beta = min(beta, eval_score)
-            if beta <= alpha:
-                break
-        return min_eval, best_move
-    
 def action_to_move(action, grid_size):
     num_horiz = (grid_size + 1) * grid_size  # Số đường ngang trong bảng
 
@@ -635,7 +590,7 @@ def create_chart(model, bot_type):
 # Create a DQN model instance (for a 3x3 board, state and action sizes are both 24)
 
 
-
+    
 # --- Giao diện trò chơi ---
 # GameFrame là khung chứa giao diện của bàn chơi
 class GameFrame(tk.Frame):
