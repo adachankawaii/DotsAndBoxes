@@ -4,9 +4,9 @@
 - [Collaborators](#collaborators)
 - [Files and Directories in the repository](#files-and-directories-in-the-repository)
 # Dots and Boxes: Introduction
-A pencil-and-paper game for two players invented in 19th Century.
-For more detail [Dots and Boxes](https://en.wikipedia.org/wiki/Dots_and_Boxes)
-We will try to cover as much boxes as possible, as shown in the figure
+- A pencil-and-paper game for two players invented in 19th Century.
+- For more detail [Dots and Boxes](https://en.wikipedia.org/wiki/Dots_and_Boxes)
+- We will try to cover as much boxes as possible, as shown in the figure
 [▶️ Watch Sample Video](Video.gif)
 # How to use
 Download and run the file 
@@ -27,8 +27,8 @@ We are the sophomore majoring in Computer Science of HaNoi University of Science
 - Pham Hoang Tien - 20230071
 - Nguyen Minh Tung - 20235239
 # Files and Directories in the repository
-DQN.py containing buffer and model.
-Minimax.py Use Minimax to solve the problem.
-main.py insists of UI, state,..
-simulation.py contains the simulation of the game to conduct the experiment.
+- DQN.py containing buffer and model.
+- Minimax.py Use Minimax to solve the problem.
+- main.py insists of UI, state,..
+- simulation.py contains the simulation of the game to conduct the experiment.
 
