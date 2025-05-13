@@ -7,7 +7,7 @@
 - A pencil-and-paper game for two players invented in 19th Century.
 - For more detail [Dots and Boxes](https://en.wikipedia.org/wiki/Dots_and_Boxes)
 - We will try to cover as much boxes as possible, as shown in the figure
-[▶️ Watch Sample Video](Video.gif)
+- [▶️ Watch Sample Video](Video.gif)
 # How to use
 Download and run the file 
 - For Minimax and DQN just run the file main.py
