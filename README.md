@@ -11,7 +11,7 @@
 # How to use
 Download and run the file 
 - For Minimax and DQN just run the file main.py
-- For Genetic Algorithm run the C++ file
+- For Genetic Algorithm run the geneticalgorithm.cpp file
 # Requirements
 Remember to pip install these library before running
 - pytorch
@@ -29,6 +29,7 @@ We are the sophomore majoring in Computer Science of HaNoi University of Science
 # Files and Directories in the repository
 - DQN.py containing buffer and model.
 - Minimax.py Use Minimax to solve the problem.
-- main.py insists of UI, state,..
+- main.py insists of UI, state,...
 - simulation.py contains the simulation of the game to conduct the experiment.
+- geneticalgorithm.cpp use GA to solve the problem.
 
