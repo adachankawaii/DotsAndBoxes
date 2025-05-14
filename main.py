@@ -237,9 +237,9 @@ class GameState:
                 
                 if edges == 3:  # Ô có 3 cạnh đã được đánh dấu -> Có thể hoàn thành ngay
                     if self.turn == bot:
-                        immediate_boxes = 1.0
+                        immediate_boxes += 1.0
                     else:
-                        dangerous_boxes = 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
+                        dangerous_boxes += 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
         score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
         return score
 
@@ -289,9 +289,9 @@ def evaluate_state(self, turn):
             
             if edges == 3:  # Ô có 3 cạnh đã được đánh dấu -> Có thể hoàn thành ngay
                 if self.turn == bot:
-                    immediate_boxes = 1.0
+                    immediate_boxes += 1.0
                 else:
-                    dangerous_boxes = 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
+                    dangerous_boxes += 1.0  # Nếu đến lượt người chơi, họ có thể lấy ô này
     score += immediate_boxes * 1.0 - dangerous_boxes * 2.0  # Tăng điểm cho ô có thể hoàn thành ngay, giảm điểm cho ô nguy hiểm
     return score
 
@@ -316,6 +316,102 @@ def move_to_action(move, grid_size):
         return i * grid_size + j  # Chỉ số trong phần `horiz`
     elif move_type == "v":
         return (grid_size + 1) * grid_size + i * (grid_size + 1) + j  # Chỉ số trong phần `vert`
+
+import matplotlib.pyplot as plt
+
+def simulate_game(model, rows=3, cols=3, opponent_type="random"):
+    """
+    Simulate a game where both the bot and its opponent select moves randomly.
+    The bot is marked as "bot" and the opponent as "player".
+    """
+    state_obj = GameState(rows, cols)
+    state_obj.reset()
+    while not state_obj.is_game_over():
+        if state_obj.turn == "bot":
+            # Bot uses minimax. If minimax returns no move, fallback to random choice.
+            move = get_best_dqn_move(state_obj, model)
+        else:
+            if opponent_type == "Random":
+                possible_moves, _ = state_obj.get_possible_moves()
+                move = random.choice(possible_moves)
+            elif opponent_type == "Minimax":
+                _, move = minimax(state_obj, 3, -math.inf, math.inf, True)
+                if move is None:
+                    possible_moves, _ = state_obj.get_possible_moves()
+                    move = random.choice(possible_moves)
+            elif opponent_type == "Simple-greedy Player":
+                #Code tham lam trong do choi random neu khong co nuoc an ngay, neu co nuoc an ngay thi danh nuoc do
+                possible_moves, _ = state_obj.get_possible_moves()
+                move = random.choice(possible_moves)
+                for m in possible_moves:
+                    state_clone = state_obj.clone()
+                    extra = state_clone.apply_move(m, "player")
+                    if extra:
+                        move = m
+                        break
+            elif opponent_type == "Greedy Player":
+                move = None
+                # Code tham lam giong nhu random_player, nhung nuoc di duoc chon khong dua bot vao trang thai nguy hiem
+                best_move = None
+                best_score = -float('inf')
+                possible_moves, _ = state_obj.get_possible_moves()
+                for m in possible_moves:
+                    state_clone = state_obj.clone()
+                    extra = state_clone.apply_move(m, "player")
+                    if extra:
+                        score = 1000
+                    else:
+                        score = state_clone.evaluate_state(0)
+                    if score > best_score:
+                        best_score = score
+                        best_move = m
+                move = best_move
+                
+        extra = state_obj.apply_move(move, state_obj.turn)
+        if not extra:
+            state_obj.turn = "player" if state_obj.turn == "bot" else "bot"
+    
+    bot_score = np.sum(state_obj.boxes == "bot")
+    player_score = np.sum(state_obj.boxes == "player")
+    
+    if bot_score > player_score:
+        return 1  # Bot wins
+    elif bot_score < player_score:
+        return 0  # Opponent wins
+    else:
+        return 0.5  # Tie
+
+def create_chart(model, bot_type):
+    """
+    Create a chart showing the win rate over 100 simulated games.
+    The bot_type parameter determines which simulation to run:
+        - "DQN": uses the provided DQN model via get_best_dqn_move.
+        - "Minimax": uses the minimax algorithm.
+        - "Random": all moves are chosen randomly.
+    """
+    win_rate = 0.0
+    win_rates = []
+    num_games = 100
+
+    for game in range(1, num_games + 1):
+        
+        result = simulate_game(model, 3, 3, opponent_type=bot_type)
+        
+        win_rate += result
+        current_rate = win_rate / game
+        win_rates.append(current_rate)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, num_games + 1), win_rates)
+    plt.xlabel("Number of Games")
+    plt.ylabel("Bot Win Rate")
+    plt.title(f"DQN Bot vs {bot_type} Win Rate Over {num_games} Games")
+    plt.grid(True)
+    plt.ylim(-0.2, 1.2)
+    plt.show(block=True)
+
+# Create a DQN model instance (for a 3x3 board, state and action sizes are both 24)
+
 
 
 # --- Giao diện trò chơi ---
@@ -674,10 +770,14 @@ class App(tk.Tk):
                 model1 = DQN(game_frame.state.state_size, game_frame.state.action_size)
                 model2 = DQN(game_frame.state.state_size, game_frame.state.action_size)
                 self.model = train_dqn(game_frame.state, model1, model2)
-
-            game_frame.model = self.model
             
-        game_frame.state.reset()
+            game_frame.model = self.model
+            create_chart(game_frame.model, "Minimax")
+            create_chart(game_frame.model, "Random")
+            create_chart(game_frame.model, "Simple-greedy Player")
+            create_chart(game_frame.model, "Greedy Player")
+            
+        #game_frame.state.reset()
         game_frame.pack(fill="both", expand=True)
 
 
