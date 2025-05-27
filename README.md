@@ -13,12 +13,7 @@ Download and run the file
 - For Minimax and DQN just run the file main.py
 - For Genetic Algorithm run the geneticalgorithm.cpp file
 # Requirements
-Remember to pip install these library before running
-- pytorch
-- numpy
-- tkinter
-- random
-- matplotlib
+Install all the required lib by using command pip install -r requirements.txt
 # Collaborators
 We are the sophomore majoring in Computer Science of HaNoi University of Science and Technology. Under the guidance of our lecturer, Assoc. Prof. Le Thanh Huong, we have done and worked together on this project.
 - Leader: Nguyen Ngoc Anh - 20235013
